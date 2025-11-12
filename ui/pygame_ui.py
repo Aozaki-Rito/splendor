@@ -8,7 +8,7 @@ from game.card import Card
 from game.noble import Noble
 from game.player import Player
 
-FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "SimHei.ttf")
+FONT_PATH = os.path.join(os.path.dirname(__file__), "fonts", "NotoSansCJK-Regular.otf")
 
 # ==================== 基础颜色 ====================
 WHITE = (255, 255, 255)
@@ -87,7 +87,7 @@ class PygameUI:
 
     # ==================== 绘制函数 ====================
     def _draw_text(self, text, pos, color=BLACK, size=22):
-        font = pygame.font.SysFont("notosanscjksc", size)
+        font = pygame.font.Font(FONT_PATH, size)
         surface = font.render(str(text), True, color)
         self.screen.blit(surface, pos)
 

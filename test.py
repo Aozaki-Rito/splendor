@@ -1,9 +1,10 @@
 import pygame
 import sys
+import os
 
 # 初始化
 pygame.init()
-
+FONT_PATH = os.path.join(os.path.dirname(__file__), "ui", "fonts", "NotoSansCJK-Regular.otf")
 
 # 屏幕
 WIDTH, HEIGHT = 400, 300
@@ -17,7 +18,8 @@ BLUE = (100, 150, 255)
 DARK_BLUE = (70, 120, 200)
 
 # 字体
-font = pygame.font.SysFont("notosanscjksc", 22)
+# font = pygame.font.SysFont("notosanscjksc", 22)
+font = pygame.font.Font(FONT_PATH, 22)
 
 # 按钮属性
 button_rect = pygame.Rect(150, 120, 100, 50)

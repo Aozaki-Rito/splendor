@@ -392,13 +392,11 @@ def run_game_with_pygame(args):
     pygame_ui = PygameUI(game)
 
     # 启动游戏逻辑线程
-    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay))
+    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay), daemon=True)
     logic_thread.start()
 
     # 主线程负责渲染
     pygame_ui.run_loop()
-
-    logic_thread.join()
 
 
 def run_evaluation(args):
