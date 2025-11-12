@@ -39,7 +39,6 @@ test_results/
 *.sh
 
 # 配置文件
-config.json
 .env
 
 # 保留示例配置文件

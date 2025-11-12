@@ -1,0 +1,22 @@
+{
+  "models": [
+    {
+      "name": "OpenAI GPT-3.5",
+      "type": "openai",
+      "model_name": "gpt-3.5-turbo",
+      "api_key": "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",
+      "base_url": "https://api.openai.com/v1",
+      "temperature": 0.5,
+      "max_tokens": 500
+    }
+  ],
+  "game_settings": {
+    "num_players": 2,
+    "seed": null,
+    "delay": 0.5,
+    "save_history": true
+  },
+  "evaluation_settings": {
+    "num_games": 10
+  }
+}
