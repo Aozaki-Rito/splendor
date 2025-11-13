@@ -18,15 +18,15 @@ class Noble:
 def create_standard_nobles() -> list[Noble]:
     """创建标准游戏中的所有贵族"""
     nobles = [
-        Noble(3, {GemColor.WHITE: 4, GemColor.RED: 4}, "N1"),
-        Noble(3, {GemColor.WHITE: 3, GemColor.BLUE: 3, GemColor.RED: 3}, "N2"),
-        Noble(3, {GemColor.BLUE: 4, GemColor.GREEN: 4}, "N3"),
-        Noble(3, {GemColor.BLACK: 4, GemColor.RED: 4}, "N4"),
-        Noble(3, {GemColor.WHITE: 3, GemColor.BLUE: 3, GemColor.BLACK: 3}, "N5"),
-        Noble(3, {GemColor.GREEN: 4, GemColor.BLACK: 4}, "N6"),
-        Noble(3, {GemColor.WHITE: 3, GemColor.GREEN: 3, GemColor.BLACK: 3}, "N7"),
-        Noble(3, {GemColor.BLUE: 3, GemColor.GREEN: 3, GemColor.RED: 3}, "N8"),
-        Noble(3, {GemColor.WHITE: 4, GemColor.BLUE: 4}, "N9"),
-        Noble(3, {GemColor.GREEN: 3, GemColor.RED: 3, GemColor.BLACK: 3}, "N10"),
+        Noble(3, {GemColor.WHITE: 4, GemColor.BLUE: 4}, "N1"),
+        Noble(3, {GemColor.RED: 4, GemColor.GREEN: 4}, "N2"),
+        Noble(3, {GemColor.GREEN: 3, GemColor.BLUE: 3, GemColor.WHITE: 3}, "N3"),
+        Noble(3, {GemColor.BLACK: 3, GemColor.BLUE: 3, GemColor.WHITE: 3}, "N4"),
+        Noble(3, {GemColor.WHITE: 4, GemColor.WHITE: 4}, "N5"),
+        Noble(3, {GemColor.BLUE: 4, GemColor.GREEN: 4}, "N6"),
+        Noble(3, {GemColor.BLACK: 4, GemColor.RED: 4}, "N7"),
+        Noble(3, {GemColor.GREEN: 3, GemColor.BLUE: 3, GemColor.RED: 3}, "N8"),
+        Noble(3, {GemColor.BLACK: 3, GemColor.RED: 3, GemColor.WHITE: 3}, "N9"),
+        Noble(3, {GemColor.BLACK: 3, GemColor.RED: 3, GemColor.GREEN: 3}, "N10"),
     ]
     return nobles 
