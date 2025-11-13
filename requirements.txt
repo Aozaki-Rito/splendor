@@ -6,3 +6,4 @@ tqdm==4.65.0
 rich==13.5.2
 pytest==7.4.0
 httpx==0.24.1 
+pygame==2.6.1
