@@ -9,6 +9,7 @@ import time
 import random
 from threading import Thread
 from typing import List, Dict, Any
+from pathlib import Path
 
 import openai
 from rich.console import Console
@@ -16,41 +17,13 @@ from rich.console import Console
 from game.game import Game
 from game.player import Player
 from agents.base_agent import BaseAgent
+from agents.random_agent import RandomAgent
 from agents.llm_agent import LLMAgent
 from ui.renderer import GameRenderer
 from evaluation.evaluator import Evaluator
 from utils.config_loader import load_config, get_model_config, get_game_settings, get_evaluation_settings, get_available_models
 from utils.llm_factory import create_llm_client
 from ui.pygame_ui import PygameUI
-
-
-
-class RandomAgent(BaseAgent):
-    """随机代理，随机选择动作"""
-    
-    def select_action(self, game_state: Dict[str, Any], valid_actions: List[Any]) -> Any:
-        """随机选择一个动作"""
-        return random.choice(valid_actions) if valid_actions else None
-    
-    def select_gems_to_discard(self, game_state: Dict[str, Any], gems: Dict[str, int], num_to_discard: int) -> Dict[str, int]:
-        """随机选择要丢弃的宝石"""
-        result = {}
-        colors = [color for color, count in gems.items() if count > 0]
-        
-        for _ in range(num_to_discard):
-            if not colors:
-                break
-            color = random.choice(colors)
-            result[color] = result.get(color, 0) + 1
-            gems[color] -= 1
-            if gems[color] <= 0:
-                colors.remove(color)
-        
-        return result
-    
-    def select_noble(self, game_state: Dict[str, Any], available_nobles: List[Dict[str, Any]]) -> str:
-        """随机选择一个贵族"""
-        return random.choice(available_nobles)["id"] if available_nobles else None
 
 
 def run_game_with_render(args):
@@ -299,6 +272,21 @@ def run_game_with_pygame(args):
     except FileNotFoundError as e:
         console.print(f"[bold red]错误：{e}[/bold red]")
         return
+
+    prompt_path = Path(args.prompt_path)
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            prompts = f.read()
+    except FileNotFoundError:
+        console.print(f"[bold red]错误：{prompt_path} 不存在[/bold red]")
+        return
+    blocks = [b.strip() for b in prompts.replace("\r\n","\n").split("\n\n") if b.strip()]
+    prompts = {
+        "system": blocks[0],
+        "action": blocks[1],
+        "discard": blocks[2],
+        "noble": blocks[3],
+    }
     
     # 获取游戏设置
     game_settings = get_game_settings(config)
@@ -527,6 +515,7 @@ def main():
     game_parser.add_argument("--num-llm-agents", type=int, default=1, help="LLM代理数量")
     game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史")
     game_parser.add_argument("--use_pygame", type=bool, default=True, help="使用pygame图形界面")
+    game_parser.add_argument("--prompt_path", type=str, default="agents/prompt.txt", help="prompt路径")
 
     # 为每个可能的LLM代理添加特定的模型参数
     for i in range(1, 5):  # 支持最多4个LLM代理
@@ -538,6 +527,7 @@ def main():
     eval_parser.add_argument("--seed", type=int, help="随机种子")
     eval_parser.add_argument("--model", type=str, help="使用的LLM模型名称")
     eval_parser.add_argument("--temperature", type=float, help="LLM温度参数")
+    eval_parser.add_argument("--prompt_path", type=str, default="agents/prompt.txt", help="prompt路径")
     
     # 列出模型
     list_parser = subparsers.add_parser("list-models", help="列出可用的模型")
