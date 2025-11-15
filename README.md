@@ -91,7 +91,7 @@ export AZURE_OPENAI_API_KEY=your_azure_api_key_here
 ## 使用方法
 
 ```bash
-python main.py game --model "OpenAI GPT-3.5" --num-players 2 --delay 0.5 --use_pygame True
+python main.py game --model "OpenAI GPT-4o" --num-players 2 --delay 0.5 --use_pygame True
 python main.py game --num-llm-agents 0 --num-players 2 --delay 0.5 --use_pygame True
 ```
 

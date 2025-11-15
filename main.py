@@ -18,7 +18,8 @@ from game.game import Game
 from game.player import Player
 from agents.base_agent import BaseAgent
 from agents.random_agent import RandomAgent
-from agents.llm_agent import LLMAgent
+# from agents.llm_agent import LLMAgent
+from agents.langgraph_agent import LLMAgent
 from ui.renderer import GameRenderer
 from evaluation.evaluator import Evaluator
 from utils.config_loader import load_config, get_model_config, get_game_settings, get_evaluation_settings, get_available_models
@@ -209,9 +210,21 @@ def run_game_with_render(args):
         game.save_game_history(history_file)
         console.print(f"\n游戏历史已保存到: {history_file}")
 
-def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_history: bool = False):
+def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_history: bool = False, seed: int = None, players: List[Player] = None):
     """游戏逻辑线程入口"""
     # 运行游戏直到结束
+    console = Console()
+    # 游戏开始
+    console.print("[bold cyan]========== 璀璨宝石 LLM 代理对战 ==========[/bold cyan]")
+    console.print(f"玩家: {', '.join([player.name for player in players])}")
+    if seed:
+        console.print(f"种子: {seed}\n")
+    
+    # 游戏开始时的回调
+    game_state = game.get_game_state()
+    for agent in agents:
+        agent.on_game_start(game_state)
+
     while not game.game_over:
         current_player = game.get_current_player()
         current_agent = next((a for a in agents if a._player == current_player), None)
@@ -219,6 +232,7 @@ def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_histo
         if current_agent:
             
             # 回合开始
+            console.print(f"\n[bold green]{current_player.name}[/bold green] 的回合:")
             game_state = game.get_game_state()
             current_agent.on_turn_start(game_state)
             
@@ -273,21 +287,6 @@ def run_game_with_pygame(args):
         console.print(f"[bold red]错误：{e}[/bold red]")
         return
 
-    prompt_path = Path(args.prompt_path)
-    try:
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            prompts = f.read()
-    except FileNotFoundError:
-        console.print(f"[bold red]错误：{prompt_path} 不存在[/bold red]")
-        return
-    blocks = [b.strip() for b in prompts.replace("\r\n","\n").split("\n\n") if b.strip()]
-    prompts = {
-        "system": blocks[0],
-        "action": blocks[1],
-        "discard": blocks[2],
-        "noble": blocks[3],
-    }
-    
     # 获取游戏设置
     game_settings = get_game_settings(config)
     
@@ -318,6 +317,45 @@ def run_game_with_pygame(args):
         model_names.append(default_model)
     
     # 根据模型名称创建LLM代理
+    # for i, model_name in enumerate(model_names):
+    #     model_config = get_model_config(config, model_name)
+        
+    #     if model_config:
+    #         try:
+    #             console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
+                
+    #             # 检查API密钥
+    #             api_key = model_config.get("api_key")
+    #             if not api_key:
+    #                 env_key = f"{model_config.get('type', '').upper()}_API_KEY"
+    #                 api_key = os.environ.get(env_key)
+                    
+    #             if not api_key:
+    #                 console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+    #                 continue
+                
+    #             # 创建LLM客户端
+    #             console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+    #             llm_client = create_llm_client(model_config)
+                
+    #             # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
+    #             temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
+                
+    #             agent = LLMAgent(
+    #                 player_id=f"llm_agent_{i+1}",
+    #                 name=f"{model_config.get('name')} 代理",
+    #                 llm_client=llm_client,
+    #                 temperature=temperature
+    #             )
+    #             agents.append(agent)
+    #             console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
+    #         except Exception as e:
+    #             console.print(f"[bold red]创建LLM代理失败 ({model_name}): {e}[/bold red]")
+    #             import traceback
+    #             console.print(f"[red]{traceback.format_exc()}[/red]")
+    #     else:
+    #         console.print(f"[bold red]错误: 未找到模型'{model_name}'的配置[/bold red]")
+    
     for i, model_name in enumerate(model_names):
         model_config = get_model_config(config, model_name)
         
@@ -337,17 +375,17 @@ def run_game_with_pygame(args):
                 
                 # 创建LLM客户端
                 console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
-                llm_client = create_llm_client(model_config)
-                
                 # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
                 temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
                 
                 agent = LLMAgent(
-                    player_id=f"llm_agent_{i+1}",
-                    name=f"{model_config.get('name')} 代理",
-                    llm_client=llm_client,
-                    temperature=temperature
-                )
+                        player_id=f"llm_agent_{i+1}",
+                        name=f"{model_config.get('name')} 代理",
+                        api_key=api_key,
+                        model_name=model_config.get("model_name"),
+                        temperature=temperature,
+                        max_tokens=model_config.get("max_tokens", 500)
+                    )
                 agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
             except Exception as e:
@@ -356,7 +394,8 @@ def run_game_with_pygame(args):
                 console.print(f"[red]{traceback.format_exc()}[/red]")
         else:
             console.print(f"[bold red]错误: 未找到模型'{model_name}'的配置[/bold red]")
-    
+
+
     # 补充随机代理，确保总共有足够的代理
     num_random_agents = num_players - len(agents)
     for i in range(num_random_agents):
@@ -374,13 +413,14 @@ def run_game_with_pygame(args):
         
         # 保存玩家和代理的映射关系
         agent._player = player
+    console.print(f"[bold green]已创建玩家: {', '.join([player.name for player in players])}[/bold green]")
     
     # 创建游戏
     game = Game(players, seed=seed)
     pygame_ui = PygameUI(game)
 
     # 启动游戏逻辑线程
-    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay), daemon=True)
+    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay, save_history, seed, players), daemon=True)
     logic_thread.start()
 
     # 主线程负责渲染
@@ -515,7 +555,6 @@ def main():
     game_parser.add_argument("--num-llm-agents", type=int, default=1, help="LLM代理数量")
     game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史")
     game_parser.add_argument("--use_pygame", type=bool, default=True, help="使用pygame图形界面")
-    game_parser.add_argument("--prompt_path", type=str, default="agents/prompt.txt", help="prompt路径")
 
     # 为每个可能的LLM代理添加特定的模型参数
     for i in range(1, 5):  # 支持最多4个LLM代理
@@ -527,7 +566,6 @@ def main():
     eval_parser.add_argument("--seed", type=int, help="随机种子")
     eval_parser.add_argument("--model", type=str, help="使用的LLM模型名称")
     eval_parser.add_argument("--temperature", type=float, help="LLM温度参数")
-    eval_parser.add_argument("--prompt_path", type=str, default="agents/prompt.txt", help="prompt路径")
     
     # 列出模型
     list_parser = subparsers.add_parser("list-models", help="列出可用的模型")
