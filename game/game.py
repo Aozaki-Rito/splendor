@@ -103,6 +103,7 @@ class Game:
     
     def next_player(self):
         """切换到下一个玩家"""
+        # print(f"切换到玩家 {self.get_current_player().name}")
         self.current_player_index = (self.current_player_index + 1) % self.num_players
         if self.current_player_index == 0:
             self.round_number += 1

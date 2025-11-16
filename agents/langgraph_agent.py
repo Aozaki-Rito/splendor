@@ -40,87 +40,143 @@ class AgentState(TypedDict):
     game_state: Dict[str, Any] = Field(description="当前游戏状态")
     reflexion: Reflexion = Field(description="本局游戏的反思")
     plan: List[str] = Field(description="计划")
-    past_steps: Annotated[List[Tuple], operator.add] = Field(description="已经执行的任务，以及与任务对应的数个动作")
+    past_steps: List[str] = Field(description="已经执行的任务，以及与任务对应的数个动作")
     action_choice: ActionChoice = Field(description="当前动作索引")
     valid_actions: List[str] = Field(description="当前游戏状态下可用的动作")
 
 def plan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState: 
+    print("\n====== [DEBUG] ENTER plan_node ======")
+    print("game_state keys:", list(state["game_state"].keys()))
+    print("Raw game_state:", json.dumps(state["game_state"], ensure_ascii=False))
+    
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["plan"]
     response = model.invoke({
         "formatted_state": formatted_state
     })
+
+    print("[DEBUG] plan_node output plan:", response.steps)
+    print("====== [DEBUG] EXIT plan_node ======\n")
+
     return {
         "plan": response.steps,
     }
 
+
 def wait_start_node(state: AgentState) -> AgentState:
-    """等待节点"""
+    print("\n====== [DEBUG] ENTER wait_start_node ======")
     update = interrupt("default")
+    print("[DEBUG] interrupt returned:", update)
+    print("====== [DEBUG] EXIT wait_start_node ======\n")
     return {
         "game_state": update["game_state"],
         "valid_actions": update["valid_actions"]
     }
 
+
 def think_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
+    print("\n====== [DEBUG] ENTER think_node ======")
+    print("[DEBUG] plan:", state["plan"])
+    print("[DEBUG] valid_actions:", state["valid_actions"])
+
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["think"]
     plan = state["plan"]
     plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
     task = plan[0]
+
+    actions_for_llm = "\n".join(state["valid_actions"])
     response = model.invoke({
         "formatted_state": formatted_state,
         "plan": plan_str,
         "task": task,
-        "valid_actions": state["valid_actions"]
+        "valid_actions": actions_for_llm
     })
+
+    print("[DEBUG] think_node response:", response)
+    print("====== [DEBUG] EXIT think_node ======\n")
+
     return {
         "action_choice": response
     }
 
+
 def execute_node(state: AgentState) -> AgentState:
-    """执行动作节点"""
+    print("\n====== [DEBUG] ENTER execute_node ======")
+
     update = interrupt({
         "action_choice": state["action_choice"]
     })
-    task = state["plan"][0]
+
     action_index = state["action_choice"].action_index
     action = state["valid_actions"][action_index-1]
+
+    print(f"[DEBUG] chosen action index = {action_index}, action = {action}")
+    print("[DEBUG] interrupt returned:", update)
+    print("====== [DEBUG] EXIT execute_node ======\n")
+
+    task = state["plan"][0]
+    if state.get("past_steps"):
+        past_steps = state["past_steps"] + [f"task: {task}, action: {action}"]
+    else:
+        past_steps = [f"task: {task}, action: {action}"]
+    past_steps = past_steps[-5:]
     return {
         "game_state": update["game_state"],
-        "past_steps": [(task, action)],
+        "past_steps": past_steps,
         "valid_actions": update["valid_actions"]
     }
 
+
 def reflexion_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
-    formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
+    print("\n====== [DEBUG] ENTER reflexion_node ======")
+    print("[DEBUG] past_steps:", state["past_steps"])
+    print("[DEBUG] current reflexion:", state.get("reflexion"))
+
     store = runtime.context.store
+    items = store.search((runtime.context.player_id, "memories"))
+    print(f"[DEBUG] memory items found: {len(items)}")
+
+    formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["reflexion"]
-    player_id = runtime.context.player_id
-    items = store.search((player_id, "memories"))
-    memory = items[-20:]
+    memory = items[-5:]
     reflexion = state.get("reflexion", Reflexion(summary="", thought=""))
+
     response = model.invoke({
         "formatted_state": formatted_state,
         "plan": state["plan"],
         "past_steps": state["past_steps"],
         "history": memory,
+        "valid_actions": state["valid_actions"],
         "summary": reflexion.summary,
         "thought": reflexion.thought
     })
+
+    print("[DEBUG] reflexion_node new reflexion:", response)
+    print("====== [DEBUG] EXIT reflexion_node ======\n")
     return {
         "reflexion": response
     }
 
+
 def replan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
+    print("\n====== [DEBUG] ENTER replan_node ======")
+    print("[DEBUG] old plan:", state["plan"])
+    print("[DEBUG] past_steps:", state["past_steps"])
+
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["replan"]
     response = model.invoke({
         "formatted_state": formatted_state,
         "plan": state["plan"],
-        "past_steps": state["past_steps"]
+        "past_steps": state["past_steps"],
+        "valid_actions": state["valid_actions"]
     })
+
+    print("[DEBUG] new plan:", response.steps)
+    print("====== [DEBUG] EXIT replan_node ======\n")
     return {"plan": response.steps}
+
 
 def should_end(state: AgentState):
     if state["game_state"]["game_over"]:
@@ -175,23 +231,38 @@ class LLMAgent(BaseAgent):
 
         self.ctx = ContextSchema(models=self.models,store=self.store,player_id=self.player_id)
 
-    def select_action(self, game_state: Dict[str, Any], valid_actions: List[Any]) -> Any:
+    def select_action(self, game_state, valid_actions):
+        print("\n====== [DEBUG] ENTER select_action ======")
+
         formatted_actions = []
         for i, action in enumerate(valid_actions):
             formatted_actions.append(f"动作 {i+1}: {str(action)}")
-        formatted_actions_str = "\n".join(formatted_actions)
+        print("[DEBUG] valid_actions:", formatted_actions)
+
         resume = {
             "game_state": game_state,
-            "valid_actions": formatted_actions_str
+            "valid_actions": formatted_actions
         }
+
+        print("[DEBUG] resume passed to agent.invoke:", resume)
+
         result = self.agent.invoke(
             Command(resume=resume),
             config=self.config,
             context=self.ctx,
-        ) # 把当前的状态传给agent
+        )
+
+        print("[DEBUG] agent.invoke result keys:", list(result.keys()))
+        print("[DEBUG] raw __interrupt__:", result["__interrupt__"])
+
         action_index = result["__interrupt__"][0].value["action_choice"].action_index
         action = valid_actions[action_index-1]
+
+        print(f"[DEBUG] FINAL ACTION INDEX = {action_index}, ACTION = {action}")
+        print("====== [DEBUG] EXIT select_action ======\n")
+
         return action
+
     
     def select_gems_to_discard(self, game_state: Dict[str, Any], gems: Dict[str, int], num_to_discard: int) -> Dict[str, int]:
         """随机选择要丢弃的宝石"""
@@ -327,14 +398,16 @@ class LLMAgent(BaseAgent):
                     {summary}
                     当前你的思路是：
                     {thought}
-                    过去一段时间内游戏的进程是：
+                    过去一段时间内游戏的进程是（仅包含过去五步）：
                     {history}
                     当前游戏状态:
                     {formatted_state}
-                    你最初的计划是这样的：
+                    你正在实施的计划是这样的：
                     {plan}
-                    您目前针对之前的任务列表已经完成了如下工作：
+                    您目前针对之前的任务列表已经完成了如下工作(仅包含过去五步）：
                     {past_steps}
+                    当前可用的动作是：
+                    {valid_actions}
                     请你根据以上信息，给出新的总结和思路。
                     """
                 )
@@ -375,11 +448,14 @@ class LLMAgent(BaseAgent):
                     请分析当前的游戏状态，按照要求修改游戏计划。
                     当前游戏状态:
                     {formatted_state}
-                    你最初的计划是这样的：
+                    你正在实施的计划是这样的：
                     {plan}
-                    您目前针对之前的任务列表已经完成了如下工作：
+                    当前可用的动作是：
+                    {valid_actions}
+                    你目前针对之前的任务列表已经完成了如下工作(仅包含过去五步）：
                     {past_steps}
                     请你注意最近一个任务，它可能需要多步去完成，而已经记录的可能只是多步中的一部分，这代表该任务可能还没有完成。
+                    并且你需要注意如果最近一个任务的内容与可用动作列表有冲突，要及时修改当前任务。
                     如果你认为它还没有完成且无需修改，请你在新制定的计划中依然将它放在第一位。
                     相应地更新你的计划。只向计划中添加仍需完成的步骤。不要返回先前完成的步骤作为计划的一部分。
                     请给出计划以及对应的思路。
@@ -391,12 +467,15 @@ class LLMAgent(BaseAgent):
     
     def on_game_start(self, game_state: Dict[str, Any]):
         """游戏开始时的回调"""
+        print("\n====== [DEBUG] on_game_start ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:game_start,state:{formatted_state}"})
         self.agent.invoke({"game_state": game_state}, config=self.config, context=self.ctx)
+        print("\n====== [DEBUG] on_game_start END ======")
 
     def on_game_end(self, game_state: Dict[str, Any], winners: List[str]):
         """游戏结束时的回调"""
+        print("\n====== [DEBUG] on_game_end ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:game_end,state:{formatted_state},winners:{winners}"})
@@ -410,18 +489,23 @@ class LLMAgent(BaseAgent):
         ]
         with open("agents/langgraph_agent_memory.json", "w", encoding="utf-8") as f:
             json.dump(memory_list, f, ensure_ascii=False, indent=2)
+        print("\n====== [DEBUG] on_game_end END ======")
     
     def on_turn_start(self, game_state: Dict[str, Any]):
         """回合开始时的回调"""
+        print("\n====== [DEBUG] on_turn_start ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:turn_start,state:{formatted_state}"})
+        print("\n====== [DEBUG] on_turn_start END ======")
     
     def on_turn_end(self, game_state: Dict[str, Any], action: Action, success: bool):
         """回合结束时的回调"""
+        print("\n====== [DEBUG] on_turn_end ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:turn_end,state:{formatted_state},action:{str(action)},success:{success}"})
+        print("\n====== [DEBUG] on_turn_end END ======")
         
 
 

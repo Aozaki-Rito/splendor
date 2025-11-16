@@ -577,8 +577,10 @@ def main():
         args.command = "game"
     
     if args.command == "game" and args.use_pygame == False:
+        print("不使用pygame图形界面:", args.use_pygame)
         run_game_with_render(args)
     elif args.command == "game" and args.use_pygame == True:
+        print("使用pygame图形界面:", args.use_pygame)
         run_game_with_pygame(args)
     elif args.command == "eval":
         run_evaluation(args)

@@ -7,7 +7,16 @@
       "api_key": "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",
       "base_url": "https://api.openai.com/v1",
       "temperature": 0.5,
-      "max_tokens": 500
+      "max_tokens": 5000
+    },
+    {
+      "name": "OpenAI GPT-4o mini",
+      "type": "openai",
+      "model_name": "gpt-4o-mini",
+      "api_key": "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",
+      "base_url": "https://api.openai.com/v1",
+      "temperature": 0.5,
+      "max_tokens": 5000
     }
   ],
   "game_settings": {
