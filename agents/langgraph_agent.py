@@ -16,11 +16,13 @@ from langgraph.types import Command, interrupt
 
 from game.game import Action
 from agents.base_agent import BaseAgent
+from utils.log import CustomLogger
 
 @dataclass
 class ContextSchema:
     models: Dict[str, Any] = None
     store: InMemoryStore = None
+    logger: CustomLogger = None
     player_id: str = None
 
 class Plan(BaseModel):
@@ -45,9 +47,10 @@ class AgentState(TypedDict):
     valid_actions: List[str] = Field(description="当前游戏状态下可用的动作")
 
 def plan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState: 
-    print("\n====== [DEBUG] ENTER plan_node ======")
-    print("game_state keys:", list(state["game_state"].keys()))
-    print("Raw game_state:", json.dumps(state["game_state"], ensure_ascii=False))
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER plan_node ======")
+    logger.log_info("game_state keys:" + str(list(state["game_state"].keys())))
+    logger.log_info("Raw game_state:" + str(json.dumps(state["game_state"], ensure_ascii=False)))
     
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["plan"]
@@ -55,19 +58,20 @@ def plan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
         "formatted_state": formatted_state
     })
 
-    print("[DEBUG] plan_node output plan:", response.steps)
-    print("====== [DEBUG] EXIT plan_node ======\n")
+    logger.log_info("====== [DEBUG] EXIT plan_node ======\n")
+    logger.log_info("plan_node output plan:" + str(response.steps))
 
     return {
         "plan": response.steps,
     }
 
 
-def wait_start_node(state: AgentState) -> AgentState:
-    print("\n====== [DEBUG] ENTER wait_start_node ======")
+def wait_start_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
     update = interrupt("default")
-    print("[DEBUG] interrupt returned:", update)
-    print("====== [DEBUG] EXIT wait_start_node ======\n")
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER wait_start_node ======")
+    logger.log_info("[DEBUG] interrupt returned:" + str(update))
+    logger.log_info("====== [DEBUG] EXIT wait_start_node ======\n")
     return {
         "game_state": update["game_state"],
         "valid_actions": update["valid_actions"]
@@ -75,9 +79,10 @@ def wait_start_node(state: AgentState) -> AgentState:
 
 
 def think_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
-    print("\n====== [DEBUG] ENTER think_node ======")
-    print("[DEBUG] plan:", state["plan"])
-    print("[DEBUG] valid_actions:", state["valid_actions"])
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER think_node ======")
+    logger.log_info("[DEBUG] plan:" + str(state["plan"]))
+    logger.log_info("[DEBUG] valid_actions:" + str(state["valid_actions"]))
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["think"]
@@ -93,27 +98,28 @@ def think_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState
         "valid_actions": actions_for_llm
     })
 
-    print("[DEBUG] think_node response:", response)
-    print("====== [DEBUG] EXIT think_node ======\n")
+    logger.log_info("[DEBUG] think_node response:" + str(response))
+    logger.log_info("====== [DEBUG] EXIT think_node ======\n")
 
     return {
         "action_choice": response
     }
 
 
-def execute_node(state: AgentState) -> AgentState:
-    print("\n====== [DEBUG] ENTER execute_node ======")
-
+def execute_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
     update = interrupt({
         "action_choice": state["action_choice"]
     })
 
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER execute_node ======")
+
     action_index = state["action_choice"].action_index
     action = state["valid_actions"][action_index-1]
 
-    print(f"[DEBUG] chosen action index = {action_index}, action = {action}")
-    print("[DEBUG] interrupt returned:", update)
-    print("====== [DEBUG] EXIT execute_node ======\n")
+    logger.log_info(f"[DEBUG] chosen action index = {action_index}, action = {action}")
+    logger.log_info("[DEBUG] interrupt returned:" + str(update))
+    logger.log_info("====== [DEBUG] EXIT execute_node ======\n")
 
     task = state["plan"][0]
     if state.get("past_steps"):
@@ -129,13 +135,14 @@ def execute_node(state: AgentState) -> AgentState:
 
 
 def reflexion_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
-    print("\n====== [DEBUG] ENTER reflexion_node ======")
-    print("[DEBUG] past_steps:", state["past_steps"])
-    print("[DEBUG] current reflexion:", state.get("reflexion"))
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER reflexion_node ======")
+    logger.log_info("[DEBUG] past_steps:" + str(state["past_steps"]))
+    logger.log_info("[DEBUG] current reflexion:" + str(state.get("reflexion")))
 
     store = runtime.context.store
     items = store.search((runtime.context.player_id, "memories"))
-    print(f"[DEBUG] memory items found: {len(items)}")
+    logger.log_info(f"[DEBUG] memory items found: {len(items)}")
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["reflexion"]
@@ -152,17 +159,18 @@ def reflexion_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentS
         "thought": reflexion.thought
     })
 
-    print("[DEBUG] reflexion_node new reflexion:", response)
-    print("====== [DEBUG] EXIT reflexion_node ======\n")
+    logger.log_info("[DEBUG] reflexion_node new reflexion:" + str(response))
+    logger.log_info("====== [DEBUG] EXIT reflexion_node ======\n")
     return {
         "reflexion": response
     }
 
 
 def replan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
-    print("\n====== [DEBUG] ENTER replan_node ======")
-    print("[DEBUG] old plan:", state["plan"])
-    print("[DEBUG] past_steps:", state["past_steps"])
+    logger = runtime.context.logger
+    logger.log_info("\n====== [DEBUG] ENTER replan_node ======")
+    logger.log_info("[DEBUG] old plan:" + str(state["plan"]))
+    logger.log_info("[DEBUG] past_steps:" + str(state["past_steps"]))
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
     model = runtime.context.models["replan"]
@@ -173,8 +181,8 @@ def replan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentStat
         "valid_actions": state["valid_actions"]
     })
 
-    print("[DEBUG] new plan:", response.steps)
-    print("====== [DEBUG] EXIT replan_node ======\n")
+    logger.log_info("[DEBUG] new plan:" + str(response.steps))
+    logger.log_info("====== [DEBUG] EXIT replan_node ======\n")
     return {"plan": response.steps}
 
 
@@ -229,22 +237,26 @@ class LLMAgent(BaseAgent):
         self.agent = builder.compile(checkpointer=checkpointer)
         self.config = {"configurable": {"thread_id": f"{self.player_id}"}}
 
-        self.ctx = ContextSchema(models=self.models,store=self.store,player_id=self.player_id)
+        self.logger = CustomLogger('log/llm.log')
+        self.logger.enable_file_logging()
+
+        self.ctx = ContextSchema(models=self.models,store=self.store,logger=self.logger,player_id=self.player_id)   
 
     def select_action(self, game_state, valid_actions):
-        print("\n====== [DEBUG] ENTER select_action ======")
+        logger = self.logger
+        logger.log_info("\n====== [DEBUG] ENTER select_action ======")
 
         formatted_actions = []
         for i, action in enumerate(valid_actions):
             formatted_actions.append(f"动作 {i+1}: {str(action)}")
-        print("[DEBUG] valid_actions:", formatted_actions)
+        logger.log_info("[DEBUG] valid_actions:" + str(formatted_actions))
 
         resume = {
             "game_state": game_state,
             "valid_actions": formatted_actions
         }
 
-        print("[DEBUG] resume passed to agent.invoke:", resume)
+        logger.log_info("[DEBUG] resume passed to agent.invoke:" + str(resume))
 
         result = self.agent.invoke(
             Command(resume=resume),
@@ -252,14 +264,14 @@ class LLMAgent(BaseAgent):
             context=self.ctx,
         )
 
-        print("[DEBUG] agent.invoke result keys:", list(result.keys()))
-        print("[DEBUG] raw __interrupt__:", result["__interrupt__"])
+        logger.log_info("[DEBUG] agent.invoke result keys:" + str(list(result.keys())))
+        logger.log_info("[DEBUG] raw __interrupt__:" + str(result["__interrupt__"]))
 
         action_index = result["__interrupt__"][0].value["action_choice"].action_index
         action = valid_actions[action_index-1]
 
-        print(f"[DEBUG] FINAL ACTION INDEX = {action_index}, ACTION = {action}")
-        print("====== [DEBUG] EXIT select_action ======\n")
+        logger.log_info(f"[DEBUG] FINAL ACTION INDEX = {action_index}, ACTION = {action}")
+        logger.log_info("====== [DEBUG] EXIT select_action ======\n")
 
         return action
 
@@ -467,19 +479,21 @@ class LLMAgent(BaseAgent):
     
     def on_game_start(self, game_state: Dict[str, Any]):
         """游戏开始时的回调"""
-        print("\n====== [DEBUG] on_game_start ======")
+        logger = self.logger
+        logger.log_info("\n====== [DEBUG] on_game_start ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:game_start,state:{formatted_state}"})
         self.agent.invoke({"game_state": game_state}, config=self.config, context=self.ctx)
-        print("\n====== [DEBUG] on_game_start END ======")
+        logger.log_info("\n====== [DEBUG] on_game_start END ======")
 
     def on_game_end(self, game_state: Dict[str, Any], winners: List[str]):
         """游戏结束时的回调"""
-        print("\n====== [DEBUG] on_game_end ======")
+        logger = self.logger
+        logger.log_info("\n====== [DEBUG] on_game_end ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:game_end,state:{formatted_state},winners:{winners}"})
-        items = self.store.search((self.player_id, "memories"))
+        items = self.store.search((self.player_id, "memories"),limit=9999)
         memory_list = [
             {
                 "key": item.key,
@@ -489,23 +503,25 @@ class LLMAgent(BaseAgent):
         ]
         with open("agents/langgraph_agent_memory.json", "w", encoding="utf-8") as f:
             json.dump(memory_list, f, ensure_ascii=False, indent=2)
-        print("\n====== [DEBUG] on_game_end END ======")
+        logger.log_info("\n====== [DEBUG] on_game_end END ======")
     
     def on_turn_start(self, game_state: Dict[str, Any]):
         """回合开始时的回调"""
-        print("\n====== [DEBUG] on_turn_start ======")
+        logger = self.logger
+        logger.log_info("\n====== [DEBUG] on_turn_start ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:turn_start,state:{formatted_state}"})
-        print("\n====== [DEBUG] on_turn_start END ======")
+        logger.log_info("\n====== [DEBUG] on_turn_start END ======")
     
     def on_turn_end(self, game_state: Dict[str, Any], action: Action, success: bool):
         """回合结束时的回调"""
-        print("\n====== [DEBUG] on_turn_end ======")
+        logger = self.logger
+        logger.log_info("\n====== [DEBUG] on_turn_end ======")
         formatted_state = json.dumps(game_state, indent=2, ensure_ascii=False)
         self.key_count += 1
         self.store.put((self.player_id,"memories"),f"key{self.key_count}",{"text":f"event:turn_end,state:{formatted_state},action:{str(action)},success:{success}"})
-        print("\n====== [DEBUG] on_turn_end END ======")
+        logger.log_info("\n====== [DEBUG] on_turn_end END ======")
         
 
 
