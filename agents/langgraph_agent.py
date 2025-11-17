@@ -193,7 +193,7 @@ def should_end(state: AgentState):
         return "think"
 
 
-class LLMAgent(BaseAgent):
+class LanggraphAgent(BaseAgent):
     """基于LLM的代理"""
     def __init__(self, player_id: str, name: str, model_name: str, api_key: str, temperature: float = 0.5, max_tokens: int = 500):
         super().__init__(player_id, name)

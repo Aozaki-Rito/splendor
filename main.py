@@ -18,8 +18,8 @@ from game.game import Game
 from game.player import Player
 from agents.base_agent import BaseAgent
 from agents.random_agent import RandomAgent
-# from agents.llm_agent import LLMAgent
-from agents.langgraph_agent import LLMAgent
+from agents.llm_agent import LLMAgent
+from agents.langgraph_agent import LanggraphAgent
 from ui.renderer import GameRenderer
 from evaluation.evaluator import Evaluator
 from utils.config_loader import load_config, get_model_config, get_game_settings, get_evaluation_settings, get_available_models
@@ -87,17 +87,31 @@ def run_game_with_render(args):
                 
                 # 创建LLM客户端
                 console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
-                llm_client = create_llm_client(model_config)
-                
-                # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                
-                agent = LLMAgent(
-                    player_id=f"llm_agent_{i+1}",
-                    name=f"{model_config.get('name')} 代理",
-                    llm_client=llm_client,
-                    temperature=temperature
-                )
+                if args.use_langgraph == 1:
+                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
+                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
+                    
+                    agent = LanggraphAgent(
+                            player_id=f"llm_agent_{i+1}",
+                            name=f"{model_config.get('name')} 代理",
+                            api_key=api_key,
+                            model_name=model_config.get("model_name"),
+                            temperature=temperature,
+                            max_tokens=model_config.get("max_tokens", 500)
+                        )
+                else:
+                    llm_client = create_llm_client(model_config)
+                    
+                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
+                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
+                    
+                    agent = LLMAgent(
+                        player_id=f"llm_agent_{i+1}",
+                        name=f"{model_config.get('name')} 代理",
+                        llm_client=llm_client,
+                        temperature=temperature
+                    )
+
                 agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
             except Exception as e:
@@ -316,46 +330,6 @@ def run_game_with_pygame(args):
     while len(model_names) < args.num_llm_agents and default_model:
         model_names.append(default_model)
     
-    # 根据模型名称创建LLM代理
-    # for i, model_name in enumerate(model_names):
-    #     model_config = get_model_config(config, model_name)
-        
-    #     if model_config:
-    #         try:
-    #             console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
-                
-    #             # 检查API密钥
-    #             api_key = model_config.get("api_key")
-    #             if not api_key:
-    #                 env_key = f"{model_config.get('type', '').upper()}_API_KEY"
-    #                 api_key = os.environ.get(env_key)
-                    
-    #             if not api_key:
-    #                 console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
-    #                 continue
-                
-    #             # 创建LLM客户端
-    #             console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
-    #             llm_client = create_llm_client(model_config)
-                
-    #             # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-    #             temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                
-    #             agent = LLMAgent(
-    #                 player_id=f"llm_agent_{i+1}",
-    #                 name=f"{model_config.get('name')} 代理",
-    #                 llm_client=llm_client,
-    #                 temperature=temperature
-    #             )
-    #             agents.append(agent)
-    #             console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
-    #         except Exception as e:
-    #             console.print(f"[bold red]创建LLM代理失败 ({model_name}): {e}[/bold red]")
-    #             import traceback
-    #             console.print(f"[red]{traceback.format_exc()}[/red]")
-    #     else:
-    #         console.print(f"[bold red]错误: 未找到模型'{model_name}'的配置[/bold red]")
-    
     for i, model_name in enumerate(model_names):
         model_config = get_model_config(config, model_name)
         
@@ -375,17 +349,31 @@ def run_game_with_pygame(args):
                 
                 # 创建LLM客户端
                 console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
-                # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                
-                agent = LLMAgent(
+                if args.use_langgraph == 1:
+                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
+                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
+                    
+                    agent = LanggraphAgent(
+                            player_id=f"llm_agent_{i+1}",
+                            name=f"{model_config.get('name')} 代理",
+                            api_key=api_key,
+                            model_name=model_config.get("model_name"),
+                            temperature=temperature,
+                            max_tokens=model_config.get("max_tokens", 500)
+                        )
+                else:
+                    llm_client = create_llm_client(model_config)
+                    
+                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
+                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
+                    
+                    agent = LLMAgent(
                         player_id=f"llm_agent_{i+1}",
                         name=f"{model_config.get('name')} 代理",
-                        api_key=api_key,
-                        model_name=model_config.get("model_name"),
-                        temperature=temperature,
-                        max_tokens=model_config.get("max_tokens", 500)
+                        llm_client=llm_client,
+                        temperature=temperature
                     )
+
                 agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
             except Exception as e:
@@ -554,7 +542,9 @@ def main():
     game_parser.add_argument("--temperature", type=float, help="LLM温度参数")
     game_parser.add_argument("--num-llm-agents", type=int, default=1, help="LLM代理数量")
     game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史")
-    game_parser.add_argument("--use_pygame", type=bool, default=True, help="使用pygame图形界面")
+    game_parser.add_argument("--use_pygame", type=int, choices=[0,1], default=1, help="是否使用pygame图形界面")
+    game_parser.add_argument("--use_langgraph", type=int, choices=[0,1], default=0, help="是否使用langgraph代理")
+    
 
     # 为每个可能的LLM代理添加特定的模型参数
     for i in range(1, 5):  # 支持最多4个LLM代理
@@ -576,10 +566,10 @@ def main():
     if not args.command:
         args.command = "game"
     
-    if args.command == "game" and args.use_pygame == False:
+    if args.command == "game" and args.use_pygame == 0:
         print("不使用pygame图形界面:", args.use_pygame)
         run_game_with_render(args)
-    elif args.command == "game" and args.use_pygame == True:
+    elif args.command == "game" and args.use_pygame == 1:
         print("使用pygame图形界面:", args.use_pygame)
         run_game_with_pygame(args)
     elif args.command == "eval":
