@@ -237,7 +237,7 @@ class LanggraphAgent(BaseAgent):
         self.agent = builder.compile(checkpointer=checkpointer)
         self.config = {"configurable": {"thread_id": f"{self.player_id}"}}
 
-        self.logger = CustomLogger('log/llm.log')
+        self.logger = CustomLogger('./log/llm.log')
         self.logger.enable_file_logging()
 
         self.ctx = ContextSchema(models=self.models,store=self.store,logger=self.logger,player_id=self.player_id)   

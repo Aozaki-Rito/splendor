@@ -34,7 +34,6 @@ ENV/
 # 项目特定文件
 results/
 test_results/
-*.log
 *.out
 *.sh
 
