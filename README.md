@@ -1,6 +1,6 @@
 # Splendor-LLM
 
-本项目fork自[Yokumii/splendor-llm](https://github.com/Yokumii/splendor-llm.git)的Version 1.0.0版本，感谢原作者的贡献。
+本项目follow自[Yokumii/splendor-llm](https://github.com/Yokumii/splendor-llm.git)的Version 1.0.0版本，感谢原作者的贡献。
 在原项目基础上，我们做了如下修改：
 - 增加了langgraph_agent.py文件，用于实现基于Plan-and-Execute架构的LLM代理，与随机代理对战胜率提升约50%。
 - 使用pygame实现了游戏界面渲染，使用参数--use_pygame True来开启游戏界面渲染。
