@@ -10,7 +10,7 @@
 ## 使用方法
 
 ```bash
-python main.py game --model "OpenAI GPT-4o" --num-players 2 --delay 0.5 --use_pygame True
+python main.py game --model "OpenAI GPT-4o mini" --num-players 2 --delay 0.5 --use_pygame True
 python main.py game --num-llm-agents 0 --num-players 2 --delay 0.5 --use_pygame True
 ```
 
