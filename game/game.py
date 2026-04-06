@@ -226,22 +226,28 @@ class Game:
             "action_data": action.to_dict()
         })
         
+        success = False
+
         if action.action_type == ActionType.TAKE_DIFFERENT_GEMS:
-            return self._execute_take_different_gems(player, action)
+            success = self._execute_take_different_gems(player, action)
         
         elif action.action_type == ActionType.TAKE_SAME_GEMS:
-            return self._execute_take_same_gems(player, action)
+            success = self._execute_take_same_gems(player, action)
         
         elif action.action_type == ActionType.RESERVE_CARD:
-            return self._execute_reserve_card(player, action)
+            success = self._execute_reserve_card(player, action)
         
         elif action.action_type == ActionType.BUY_CARD:
-            return self._execute_buy_card(player, action)
+            success = self._execute_buy_card(player, action)
         
         elif action.action_type == ActionType.BUY_RESERVED_CARD:
-            return self._execute_buy_reserved_card(player, action)
-        
-        return False
+            success = self._execute_buy_reserved_card(player, action)
+
+        # 统一在成功动作后检查终局，避免最后一轮的收尾动作如果不是买牌就漏判结束。
+        if success:
+            self._check_game_end()
+
+        return success
     
     def _execute_take_different_gems(self, player: Player, action: Action) -> bool:
         """执行拿取不同颜色宝石的动作"""
@@ -365,9 +371,6 @@ class Game:
         # 检查是否有贵族访问
         self._check_nobles_visit(player)
         
-        # 检查游戏是否结束
-        self._check_game_end()
-        
         return True
     
     def _execute_buy_reserved_card(self, player: Player, action: Action) -> bool:
@@ -402,9 +405,6 @@ class Game:
         
         # 检查是否有贵族访问
         self._check_nobles_visit(player)
-        
-        # 检查游戏是否结束
-        self._check_game_end()
         
         return True
     

@@ -4,34 +4,55 @@ set -euo pipefail
 
 # =========================================
 # 手动配置区
-# 直接修改下面这些值即可切换不同厂商/模型
+# 这个脚本只用于“在线模型单局对战”。
+# RL 训练 / 评估请直接使用 python scripts/train_rl_agent.py
+# 与 python scripts/evaluate_rl_agent.py。
+# 直接修改下面这些值即可切换不同厂商/模型。
 # =========================================
-API_KEY="your_api_key_here"
-API_KEY_ENV_NAME="ARK_API_KEY"
-MODEL_NAME="Doubao Seed 2.0 Pro"
-MODEL_TYPE="openai_compatible"
-MODEL_ID="doubao-seed-2-0-pro-260215"
-BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-PROMPT_STRATEGY="${PROMPT_STRATEGY:-rank_v2_auto}"
-TEMPERATURE="${TEMPERATURE:-0.1}"
-MAX_TOKENS="${MAX_TOKENS:-128}"
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-splendor}"
-CANDIDATE_ACTION_LIMIT="${CANDIDATE_ACTION_LIMIT:-6}"
-TARGET_LIMIT="${TARGET_LIMIT:-4}"
-NOBLE_LIMIT="${NOBLE_LIMIT:-3}"
+# 在线模型访问参数
+API_KEY="your_api_key_here"                 # 在线模型 API Key
+API_KEY_ENV_NAME="ARK_API_KEY"             # 运行时注入到哪个环境变量名
+MODEL_NAME="Doubao Seed 2.0 Pro"           # 写入临时 config 的模型显示名
+MODEL_TYPE="openai_compatible"             # openai / azure_openai / openai_compatible
+MODEL_ID="doubao-seed-2-0-pro-260215"      # 厂商模型 ID
+BASE_URL="https://ark.cn-beijing.volces.com/api/v3"  # OpenAI 兼容接口地址
+
+# 代理策略参数
+PROMPT_STRATEGY="${PROMPT_STRATEGY:-rank_v2_auto}"   # rank_v2_auto / legacy
+TEMPERATURE="${TEMPERATURE:-0.1}"                    # 仅 legacy / LangGraph 有效
+MAX_TOKENS="${MAX_TOKENS:-128}"                      # 仅 legacy / LangGraph 有效
+CANDIDATE_ACTION_LIMIT="${CANDIDATE_ACTION_LIMIT:-6}"  # 仅 rank_v2_auto 有效
+TARGET_LIMIT="${TARGET_LIMIT:-4}"                      # 仅 rank_v2_auto 有效
+NOBLE_LIMIT="${NOBLE_LIMIT:-3}"                        # 仅 rank_v2_auto 有效
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-splendor}"           # conda 环境名
 
 # 游戏运行参数
-NUM_PLAYERS="${NUM_PLAYERS:-2}"
-NUM_LLM_AGENTS="${NUM_LLM_AGENTS:-1}"
-DELAY="${DELAY:-0.5}"
-USE_PYGAME="${USE_PYGAME:-1}"
-USE_LANGGRAPH="${USE_LANGGRAPH:-0}"
-MAX_TURNS="${MAX_TURNS:-}"
-SEED="${SEED:-}"
-CONFIG_PATH="${CONFIG_PATH:-config.json}"
+NUM_PLAYERS="${NUM_PLAYERS:-2}"              # 总玩家数
+NUM_LLM_AGENTS="${NUM_LLM_AGENTS:-1}"        # 使用该模型的代理数量，其余自动补随机
+DELAY="${DELAY:-0.5}"                        # 回合间延迟
+USE_PYGAME="${USE_PYGAME:-1}"                # 1=pygame, 0=终端渲染
+USE_LANGGRAPH="${USE_LANGGRAPH:-0}"          # 1=LangGraph；必须配合 legacy
+MAX_TURNS="${MAX_TURNS:-}"                   # 调试用，跑到指定动作数就停
+SEED="${SEED:-}"                             # 随机种子
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+if [[ "$MODEL_TYPE" == "rl_ppo" ]]; then
+  echo "错误: scripts/run_doubao.sh 只用于在线模型，不用于 rl_ppo 本地模型。"
+  exit 1
+fi
+
+if [[ "$USE_LANGGRAPH" == "1" && "$PROMPT_STRATEGY" != "legacy" ]]; then
+  echo "错误: USE_LANGGRAPH=1 不能与 PROMPT_STRATEGY=$PROMPT_STRATEGY 同时使用。"
+  echo "请将 PROMPT_STRATEGY 设为 legacy。"
+  exit 1
+fi
+
+if (( NUM_LLM_AGENTS > NUM_PLAYERS )); then
+  echo "错误: NUM_LLM_AGENTS 不能大于 NUM_PLAYERS。"
+  exit 1
+fi
 
 if [[ -z "$API_KEY" || "$API_KEY" == "your_api_key_here" ]]; then
   if [[ "$USE_LANGGRAPH" == "1" ]]; then

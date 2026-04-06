@@ -21,12 +21,25 @@ from agents.base_agent import BaseAgent
 from agents.random_agent import RandomAgent
 from agents.llm_agent import LLMAgent
 from agents.rule_based_agent import RuleBasedAgent
-from agents.langgraph_agent import LanggraphAgent
 from ui.renderer import GameRenderer
 from evaluation.evaluator import Evaluator
 from utils.config_loader import load_config, get_model_config, get_game_settings, get_evaluation_settings, get_available_models
 from utils.llm_factory import create_llm_client
 from ui.pygame_ui import PygameUI
+
+try:
+    from agents.langgraph_agent import LanggraphAgent
+    LANGGRAPH_IMPORT_ERROR = None
+except Exception as exc:
+    LanggraphAgent = None
+    LANGGRAPH_IMPORT_ERROR = exc
+
+try:
+    from agents.rl_ppo_agent import RLPPOAgent
+    RL_PPO_IMPORT_ERROR = None
+except Exception as exc:
+    RLPPOAgent = None
+    RL_PPO_IMPORT_ERROR = exc
 
 
 def resolve_model_api_key(model_config: Dict[str, Any]):
@@ -46,8 +59,28 @@ def create_agent_from_model_config(
     """根据模型配置创建代理，并返回 (agent, mode_label)。"""
     prompt_strategy = model_config.get("prompt_strategy", "legacy")
     temperature = temperature_override if temperature_override is not None else model_config.get("temperature", 0.5)
+    model_type = model_config.get("type", "openai")
+
+    if model_type == "rl_ppo":
+        if use_langgraph == 1:
+            raise ValueError("rl_ppo 模型不能与 --use_langgraph 1 同时使用。")
+        if RLPPOAgent is None:
+            raise ImportError(f"RL PPO 依赖未安装或导入失败: {RL_PPO_IMPORT_ERROR}")
+        agent = RLPPOAgent(
+            player_id=player_id,
+            name=f"{model_config.get('name')} 代理",
+            model_path=model_config.get("model_path") or model_config.get("model_name"),
+            deterministic=model_config.get("deterministic", True),
+            device=model_config.get("device", "auto"),
+            run_id=run_id,
+        )
+        return agent, "rl_ppo"
 
     if use_langgraph == 1:
+        if prompt_strategy == "rank_v2_auto":
+            raise ValueError("--use_langgraph 1 不能与 prompt_strategy=rank_v2_auto 同时使用。")
+        if LanggraphAgent is None:
+            raise ImportError(f"LangGraph 依赖未安装或导入失败: {LANGGRAPH_IMPORT_ERROR}")
         api_key, _ = resolve_model_api_key(model_config)
         if not api_key:
             raise ValueError("langgraph 模式需要提供 API Key。")
@@ -180,7 +213,10 @@ def run_game_with_render(args):
             try:
                 console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
                 prompt_strategy = model_config.get("prompt_strategy", "legacy")
-                if args.use_langgraph == 1:
+                model_type = model_config.get("type", "openai")
+                if model_type == "rl_ppo":
+                    console.print(f"[cyan]创建 RL PPO 代理: 模型文件={model_config.get('model_path') or model_config.get('model_name')}[/cyan]")
+                elif args.use_langgraph == 1:
                     api_key, env_key = resolve_model_api_key(model_config)
                     if not api_key:
                         console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
@@ -233,6 +269,8 @@ def run_game_with_render(args):
     
     # 创建游戏
     game = Game(players, seed=seed)
+    for agent in agents:
+        agent._game = game
     
     # 创建渲染器
     renderer = GameRenderer(game)
@@ -438,7 +476,10 @@ def run_game_with_pygame(args):
             try:
                 console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
                 prompt_strategy = model_config.get("prompt_strategy", "legacy")
-                if args.use_langgraph == 1:
+                model_type = model_config.get("type", "openai")
+                if model_type == "rl_ppo":
+                    console.print(f"[cyan]创建 RL PPO 代理: 模型文件={model_config.get('model_path') or model_config.get('model_name')}[/cyan]")
+                elif args.use_langgraph == 1:
                     api_key, env_key = resolve_model_api_key(model_config)
                     if not api_key:
                         console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
@@ -493,6 +534,8 @@ def run_game_with_pygame(args):
     
     # 创建游戏
     game = Game(players, seed=seed)
+    for agent in agents:
+        agent._game = game
     game.max_turns = args.max_turns
     pygame_ui = PygameUI(game)
 
@@ -535,7 +578,10 @@ def run_evaluation(args):
     if model_config:
         try:
             prompt_strategy = model_config.get("prompt_strategy", "legacy")
-            if prompt_strategy == "rank_v2_auto":
+            model_type = model_config.get("type", "openai")
+            if model_type == "rl_ppo":
+                console.print(f"[cyan]创建 RL PPO 代理: 模型文件={model_config.get('model_path') or model_config.get('model_name')}[/cyan]")
+            elif prompt_strategy == "rank_v2_auto":
                 console.print("[cyan]创建纯规则代理: rank_v2_auto[/cyan]")
             else:
                 api_key, env_key = resolve_model_api_key(model_config)
@@ -610,12 +656,15 @@ def list_models(args):
     for model in models:
         name = model.get("name", "未命名")
         model_type = model.get("type", "未知")
-        model_id = model.get("model_name", "未知")
+        model_id = model.get("model_name") or model.get("model_path", "未知")
         
         # 检查API密钥是否可用
         env_key = model.get("api_key_env") or f"{model_type.upper()}_API_KEY"
         api_key = model.get("api_key") or os.environ.get(env_key)
-        api_status = "[green]是[/green]" if api_key else "[red]否[/red]"
+        if model_type == "rl_ppo":
+            api_status = "[cyan]不需要[/cyan]"
+        else:
+            api_status = "[green]是[/green]" if api_key else "[red]否[/red]"
         
         table.add_row(name, model_type, model_id, api_status)
     
@@ -634,16 +683,16 @@ def main():
     
     # 游戏模式
     game_parser = subparsers.add_parser("game", help="运行单场游戏")
-    game_parser.add_argument("--num-players", type=int, help="玩家数量")
-    game_parser.add_argument("--seed", type=int, help="随机种子")
-    game_parser.add_argument("--delay", type=float, help="回合之间的延迟时间(秒)")
-    game_parser.add_argument("--model", type=str, help="使用的LLM模型名称(用于所有LLM代理)")
-    game_parser.add_argument("--temperature", type=float, help="LLM温度参数")
-    game_parser.add_argument("--num-llm-agents", type=int, default=1, help="LLM代理数量")
-    game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史")
-    game_parser.add_argument("--use_pygame", type=int, choices=[0,1], default=1, help="是否使用pygame图形界面")
-    game_parser.add_argument("--use_langgraph", type=int, choices=[0,1], default=0, help="是否使用langgraph代理")
-    game_parser.add_argument("--max-turns", type=int, help="测试时最多执行的回合数")
+    game_parser.add_argument("--num-players", type=int, help="玩家总数；未显式创建的玩家会自动补成随机代理")
+    game_parser.add_argument("--seed", type=int, help="随机种子，用于复现实验")
+    game_parser.add_argument("--delay", type=float, help="相邻回合之间的显示延迟(秒)")
+    game_parser.add_argument("--model", type=str, help="config.json 中的模型名称；用于所有非随机代理")
+    game_parser.add_argument("--temperature", type=float, help="仅对 legacy / LangGraph 有效的温度覆盖值")
+    game_parser.add_argument("--num-llm-agents", type=int, default=1, help="使用配置模型的代理数量；其余玩家自动补随机代理")
+    game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史到运行目录")
+    game_parser.add_argument("--use_pygame", type=int, choices=[0,1], default=1, help="1=pygame 图形界面，0=终端渲染")
+    game_parser.add_argument("--use_langgraph", type=int, choices=[0,1], default=0, help="1=强制使用 LangGraph；不能与 rl_ppo 或 rank_v2_auto 同时使用")
+    game_parser.add_argument("--max-turns", type=int, help="调试用；达到该动作数后提前停止")
     
 
     # 为每个可能的LLM代理添加特定的模型参数

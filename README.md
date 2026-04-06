@@ -1,34 +1,19 @@
 # Splendor-LLM
 
-本项目基于 [Yokumii/splendor-llm](https://github.com/Yokumii/splendor-llm.git) 的 `Version 1.0.0` 改造而来，当前已经演化成一个“璀璨宝石规则引擎 + 多种代理 + 可视化 + 评测工具”的实验项目。
+本项目是一个“璀璨宝石规则引擎 + 多种代理 + 可视化 + 评测工具”的实验项目。
 
-目前项目里保留并支持三类策略代理：
-
-- `legacy`
-  - 纯 LLM 策略
-  - 直接把完整游戏状态和全部合法动作发送给模型做决策
-- `rank_v2_auto`
-  - 纯规则策略
-  - 不调用 LLM，由程序根据启发式评分直接选择动作
-- `LanggraphAgent`
-  - 基于 LangGraph 的多步决策策略
-  - 会走 `plan -> think -> reflexion -> replan` 链路
-  - 现已支持 OpenAI 兼容接口，包括豆包
-
-此外，项目还保留了：
+当前支持的代理类型：
 
 - `RandomAgent`
-  - 随机策略，用于对照测试
-
-## 当前能力
-
-- 完整实现璀璨宝石核心规则
-- 支持终端渲染和 `pygame` 图形界面
-- 支持单局对战与批量评测
-- 支持 OpenAI / Azure OpenAI / OpenAI 兼容接口模型
-- 已支持豆包这类 OpenAI 兼容格式模型
-- LangGraph 代理已支持豆包这类 OpenAI 兼容接口
-- 提供独立运行日志、对局历史和评测结果归档
+  - 随机策略
+- `legacy`
+  - 纯 LLM 策略
+- `rank_v2_auto`
+  - 纯规则策略
+- `LanggraphAgent`
+  - LangGraph 多步决策策略
+- `RL PPO Agent`
+  - 本地 PPO 模型
 
 ## 环境准备
 
@@ -40,269 +25,309 @@ conda activate splendor
 pip install -r requirements.txt
 ```
 
-依赖见 [requirements.txt](/home/aozaki/projects/code/splendor/requirements.txt)。
+依赖文件：
+- [requirements.txt](/home/aozaki/projects/code/splendor/requirements.txt)
 
-## 项目入口
+## 统一调用方式
 
-主入口是 [main.py](/home/aozaki/projects/code/splendor/main.py)，支持三个子命令：
+本文档只保留两类主入口：
+
+1. 单局对战 / 批量评测：统一用 `python main.py ...`
+2. RL 训练 / RL 评估：统一用 `python scripts/...`
+
+[scripts/run_doubao.sh](/home/aozaki/projects/code/splendor/scripts/run_doubao.sh) 仍然保留，但它只是在线模型的便捷包装脚本，不再作为本文档主流程。
+
+## `main.py` 入口
+
+主入口文件：
+- [main.py](/home/aozaki/projects/code/splendor/main.py)
+
+支持三个子命令：
 
 - `game`
-  - 运行单场游戏
+  - 运行单局
 - `eval`
-  - 运行多场评测
+  - 批量评测
 - `list-models`
-  - 列出当前配置文件中的可用模型
+  - 列出 `config.json` 中可用的模型
 
-例如：
+先看帮助：
 
 ```bash
+python main.py game --help
+python main.py eval --help
 python main.py list-models
-python main.py game --model "OpenAI GPT-4o mini"
-python main.py eval --model "OpenAI GPT-4o mini" --num-games 10
 ```
+
+## 策略是怎么决定的
+
+单局运行时，最终使用哪种策略，由“模型配置 + 命令行参数”共同决定：
+
+1. 如果模型 `type=rl_ppo`
+   - 使用 `RL PPO Agent`
+2. 否则，如果命令行传了 `--use_langgraph 1`
+   - 使用 `LanggraphAgent`
+3. 否则，如果模型配置里 `prompt_strategy=rank_v2_auto`
+   - 使用纯规则策略
+4. 否则
+   - 使用 `legacy` 纯 LLM 策略
 
 ## 配置文件
 
-默认配置文件是 [config.json](/home/aozaki/projects/code/splendor/config.json)。
+默认配置文件：
+- [config.json](/home/aozaki/projects/code/splendor/config.json)
 
-一个模型配置大概长这样：
+示例：
 
 ```json
 {
-  "name": "OpenAI GPT-4o mini",
-  "type": "openai",
-  "model_name": "gpt-4o-mini",
-  "api_key_env": "OPENAI_API_KEY",
-  "base_url": "https://api.openai.com/v1",
+  "name": "Doubao Seed 2.0 Pro",
+  "type": "openai_compatible",
+  "model_name": "doubao-seed-2-0-pro-260215",
+  "api_key_env": "ARK_API_KEY",
+  "base_url": "https://ark.cn-beijing.volces.com/api/v3",
   "prompt_strategy": "legacy",
   "temperature": 0.5,
   "max_tokens": 500
 }
 ```
 
-支持的常见字段：
+本地 RL 模型示例：
+
+```json
+{
+  "name": "RL PPO Agent (Local)",
+  "type": "rl_ppo",
+  "model_path": "runs/rl/v1_ppo_random_seed7_t50k_post_endfix/model.zip",
+  "deterministic": true,
+  "device": "auto"
+}
+```
+
+### 模型字段说明
 
 - `name`
-  - 模型显示名，命令行里通过 `--model` 使用
+  - 模型显示名
+  - 命令行里的 `--model` 就是填这个名字
 - `type`
-  - `openai`、`azure_openai`、`openai_compatible`
+  - 决定模型大类
+  - 支持：`openai`、`azure_openai`、`openai_compatible`、`rl_ppo`
 - `model_name`
-  - 实际调用的模型 ID
-- `api_key` / `api_key_env`
-  - API Key 可直接写入配置，也可通过环境变量读取
+  - 在线模型的真实模型 ID
+  - 只对 `openai` / `azure_openai` / `openai_compatible` 有意义
+- `model_path`
+  - 本地 PPO 模型文件路径
+  - 只对 `rl_ppo` 有意义
+- `api_key`
+  - 直接写在配置里的 API Key
+  - 不建议提交到仓库
+- `api_key_env`
+  - 从环境变量读取 API Key 的变量名
 - `base_url`
   - OpenAI 兼容接口地址
+  - 只对在线模型有意义
+- `api_version`
+  - Azure OpenAI 的 API 版本
+  - 只对 `azure_openai` 有意义
+- `deployment_name`
+  - Azure OpenAI 的 deployment 名称
+  - 只对 `azure_openai` 有意义
 - `prompt_strategy`
-  - 当前正式支持 `legacy` 和 `rank_v2_auto`
-  - LangGraph 不通过 `prompt_strategy` 切换，而是通过 `--use_langgraph 1` 启用
+  - 在线普通代理的策略模式
+  - 当前只正式保留：`legacy`、`rank_v2_auto`
 - `temperature`
+  - 采样温度
+  - 只对 `legacy` / `LanggraphAgent` 有意义
 - `max_tokens`
+  - LLM 输出 token 上限
+  - 只对 `legacy` / `LanggraphAgent` 有意义
 - `candidate_action_limit`
+  - 规则策略候选动作上限
+  - 只对 `rank_v2_auto` 有意义
 - `target_limit`
+  - 规则策略关注的目标卡数量
+  - 只对 `rank_v2_auto` 有意义
 - `noble_limit`
+  - 规则策略关注的贵族数量
+  - 只对 `rank_v2_auto` 有意义
+- `deterministic`
+  - PPO 推理是否走确定性动作
+  - 只对 `rl_ppo` 有意义
+- `device`
+  - PPO 模型加载设备，如 `auto` / `cpu` / `cuda`
+  - 只对 `rl_ppo` 有意义
 
-## 三种策略
+## `game` 命令参数说明
 
-### `rank_v2_auto`
+这些参数最常用：
 
-这是当前默认策略，也是最推荐的运行方式。
+- `--model`
+  - 指定 `config.json` 里的模型名称
+- `--num-players`
+  - 总玩家数
+  - 没有显式创建的玩家会自动补成随机代理
+- `--num-llm-agents`
+  - 使用配置模型的代理数量
+  - 其余玩家自动补成随机代理
+- `--use_pygame 1|0`
+  - `1` 表示用 pygame 图形界面
+  - `0` 表示只用终端渲染
+- `--use_langgraph 1|0`
+  - `1` 表示强制走 LangGraph
+  - `0` 表示不启用 LangGraph
+- `--temperature`
+  - 覆盖模型配置里的温度
+  - 只对 `legacy` / LangGraph 有意义
+- `--delay`
+  - 每回合之间的显示延迟秒数
+- `--seed`
+  - 固定随机种子，便于复现
+- `--max-turns`
+  - 调试用，只跑前若干个动作就停
+- `--save-history`
+  - 保存游戏历史
 
-特点：
+## 不能同时开的组合
 
-- 纯规则，不依赖 LLM 返回
-- 单步决策非常快
-- 适合本地演示、UI 测试和与随机代理做基线对战
-- 默认脚本就使用这个模式
+下面这些组合不要同时开：
 
-如果你只想直接启动项目，通常直接运行：
+- `--use_langgraph 1` 和 `prompt_strategy=rank_v2_auto`
+  - 两者互斥
+  - 现在代码里会直接报错
+- `--use_langgraph 1` 和 `type=rl_ppo`
+  - 两者互斥
+  - 现在代码里会直接报错
 
-```bash
-./scripts/run_doubao.sh
-```
+## 会被忽略的变量
 
-即使脚本里没有填写真实 API Key，这个模式也能跑起来。
+有些变量不是报错，而是单纯没作用：
 
-### `legacy`
+- `temperature`
+  - 对 `rank_v2_auto` 没作用
+  - 对 `rl_ppo` 没作用
+- `max_tokens`
+  - 对 `rank_v2_auto` 没作用
+  - 对 `rl_ppo` 没作用
+- `prompt_strategy`
+  - 对 `rl_ppo` 没作用
+  - 当 `--use_langgraph 1` 时也不再决定最终代理类型
+- `model_path`
+  - 对在线模型没作用
+- `base_url`
+  - 对 `rl_ppo` 没作用
 
-这是原始纯 LLM 模式。
+## 最常用命令
 
-特点：
-
-- 直接把完整游戏状态和可用动作交给模型决策
-- 更接近“真正让模型自己思考”
-- 决策速度明显慢于规则模式
-- 需要可用的 API Key
-
-切换方式：
-
-```bash
-PROMPT_STRATEGY=legacy ./scripts/run_doubao.sh
-```
-
-### `LanggraphAgent`
-
-这是 LangGraph 多步决策模式。
-
-特点：
-
-- 使用 `plan -> think -> reflexion -> replan` 状态机进行决策
-- 支持豆包等 OpenAI 兼容接口
-- 需要 API Key
-- 决策链更长，通常比 `legacy` 和 `rank_v2_auto` 更慢
-
-切换方式：
-
-```bash
-USE_LANGGRAPH=1 PROMPT_STRATEGY=legacy ./scripts/run_doubao.sh
-```
-
-也可以直接用命令行：
-
-```bash
-python main.py game --model "Doubao Seed 2.0 Pro" --use_langgraph 1 --use_pygame 0
-```
-
-## 使用豆包 / OpenAI 兼容模型
-
-项目已经支持豆包这类 OpenAI 兼容接口模型。最方便的方式是直接改 [scripts/run_doubao.sh](/home/aozaki/projects/code/splendor/scripts/run_doubao.sh) 顶部配置。
-
-脚本顶部可以修改：
-
-```bash
-API_KEY="your_api_key_here"
-API_KEY_ENV_NAME="ARK_API_KEY"
-MODEL_NAME="Doubao Seed 2.0 Pro"
-MODEL_TYPE="openai_compatible"
-MODEL_ID="doubao-seed-2-0-pro-260215"
-BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
-PROMPT_STRATEGY="${PROMPT_STRATEGY:-rank_v2_auto}"
-```
-
-如果你想换成别的 OpenAI 兼容厂商，通常只需要改：
-
-```bash
-MODEL_NAME="你的模型显示名"
-MODEL_TYPE="openai_compatible"
-MODEL_ID="厂商提供的模型ID"
-BASE_URL="厂商提供的兼容接口地址"
-API_KEY="你的 key"
-```
-
-## 快速开始
-
-### 1. 规则模式启动一局
-
-```bash
-./scripts/run_doubao.sh
-```
-
-### 2. 纯 LLM 模式启动一局
-
-```bash
-PROMPT_STRATEGY=legacy ./scripts/run_doubao.sh
-```
-
-### 3. LangGraph 模式启动一局
-
-```bash
-USE_LANGGRAPH=1 PROMPT_STRATEGY=legacy ./scripts/run_doubao.sh
-```
-
-### 4. 无图形界面测试
-
-```bash
-USE_PYGAME=0 ./scripts/run_doubao.sh
-```
-
-### 5. 限制只跑前几回合
-
-```bash
-MAX_TURNS=3 USE_PYGAME=0 DELAY=0 ./scripts/run_doubao.sh
-```
-
-### 6. 指定随机种子
-
-```bash
-SEED=7 USE_PYGAME=0 ./scripts/run_doubao.sh
-```
-
-## 常用命令
-
-### 终端渲染模式
-
-```bash
-python main.py game --model "OpenAI GPT-4o mini" --num-players 2 --use_pygame 0
-```
-
-### pygame 图形界面
-
-```bash
-python main.py game --model "OpenAI GPT-4o mini" --num-players 2 --use_pygame 1
-```
-
-### 两个随机代理对战
-
-```bash
-python main.py game --num-llm-agents 0 --num-players 2 --use_pygame 1
-```
-
-### 批量评测
-
-```bash
-python main.py eval --model "OpenAI GPT-4o mini" --num-games 10
-```
-
-### LangGraph 模式
-
-```bash
-python main.py game --model "OpenAI GPT-4o mini" --use_langgraph 1 --use_pygame 0
-```
-
-### 列出配置中的模型
+### 1. 查看模型列表
 
 ```bash
 python main.py list-models
 ```
 
+### 2. 运行纯规则策略
+
+前提：
+- 你选的模型配置里 `prompt_strategy=rank_v2_auto`
+
+```bash
+python main.py game --model "Doubao Seed 2.0 Pro" --use_pygame 1
+```
+
+### 3. 运行纯 LLM 策略
+
+前提：
+- 你选的模型配置里 `prompt_strategy=legacy`
+- 已经配置好 API Key
+
+```bash
+python main.py game --model "Doubao Seed 2.0 Pro" --use_pygame 1
+```
+
+### 4. 运行 LangGraph 策略
+
+前提：
+- 你选的是在线模型
+- 已经配置好 API Key
+- 模型配置不要用 `rank_v2_auto`
+
+```bash
+python main.py game --model "Doubao Seed 2.0 Pro" --use_langgraph 1 --use_pygame 0
+```
+
+### 5. 运行本地 PPO 模型
+
+```bash
+python main.py game --model "RL PPO Agent (Local)" --use_pygame 1
+```
+
+说明：
+- 这条命令当前是 `RL PPO Agent (Local)` 对随机代理的自动对局
+- 还不是“人类玩家手动操作 vs RL Agent”
+
+### 6. 只跑前几回合作烟测
+
+```bash
+python main.py game --model "RL PPO Agent (Local)" --use_pygame 0 --delay 0 --max-turns 3 --seed 7
+```
+
+### 7. 批量评测
+
+```bash
+python main.py eval --model "Doubao Seed 2.0 Pro" --num-games 10
+```
+
+## RL 训练与评估
+
+RL 设计文档：
+- [RL_AGENT_DESIGN.md](/home/aozaki/projects/code/splendor/RL_AGENT_DESIGN.md)
+
+训练：
+
+```bash
+python scripts/train_rl_agent.py --timesteps 50000
+```
+
+评估：
+
+```bash
+python scripts/evaluate_rl_agent.py \
+  --model-path runs/rl/v1_ppo_random_seed7_t50k_post_endfix/model.zip \
+  --episodes 20 \
+  --opponent random
+```
+
+当前基线：
+
+- `MaskablePPO + MlpPolicy`
+- `50000 timesteps`
+- 修复终局判定 bug 后重新训练
+- 修复动作编码 bug 后重新评估
+- 对随机代理 `20` 局结果为 `18胜 2负 0平`
+
 ## 输出产物
 
-运行后常见产物有两类：
+常见输出目录：
 
 - `results/runs/...`
   - 单次运行目录
-  - 包含运行参数、配置快照、游戏历史、评测结果
+  - 包含参数快照、配置快照、历史和评测结果
 - `log/llm_agent_runs/...`
-  - 代理日志
-  - 包含每次决策的 prompt、响应、耗时或规则摘要
+  - 各代理日志
+- `runs/rl/...`
+  - RL 模型、monitor、评估 JSON
+- `runs/tensorboard/...`
+  - TensorBoard 日志
 
-当前这些目录默认都不建议提交到 git。
+## 便捷脚本说明
 
-## 实验脚本
+[scripts/run_doubao.sh](/home/aozaki/projects/code/splendor/scripts/run_doubao.sh) 仍然可用，但它只适合：
 
-项目里还有一个批量短测脚本 [run_strategy_matrix.py](/home/aozaki/projects/code/splendor/scripts/run_strategy_matrix.py)，用于快速比较不同策略或不同种子下的表现。
+- 你明确知道自己在跑在线模型
+- 你就是想少打一串命令
 
-示例：
+这个脚本现在也会检查两类冲突：
 
-```bash
-python scripts/run_strategy_matrix.py \
-  --strategies legacy rank_v2_auto \
-  --seeds 7 11 19 \
-  --max-turns 2
-```
+- `USE_LANGGRAPH=1` 不能和 `PROMPT_STRATEGY=rank_v2_auto` 同时使用
+- `MODEL_TYPE=rl_ppo` 不应该走这个脚本
 
-它会把汇总结果写到 `results/experiments/...`。
-
-## 已知说明
-
-- `legacy` 模式依赖模型响应速度，单步耗时可能较高
-- `rank_v2_auto` 是当前最稳定的默认模式，但它本质上是规则代理，不是纯 LLM 决策
-- `LanggraphAgent` 已经可以使用豆包这类 OpenAI 兼容接口运行，但多步链路更长，通常耗时最高
-- `LanggraphAgent` 仍保留在仓库中，但不是当前 README 推荐的主流程
-- 如果要用 `LanggraphAgent`，建议先确认对应模型接口支持当前 LangChain OpenAI 适配层
-- `config.json` 里如果直接写入 API Key，请注意不要提交到公开仓库
-
-## TODO
-
-- 继续优化纯 LLM 模式的状态压缩和决策质量
-- 继续整理 `LanggraphAgent` 相关依赖与兼容性
-- 为规则代理和 LLM 代理补充更系统的对战基准
+如果你只是想按项目标准方式运行，请优先看上面的 `python main.py ...` 和 `python scripts/...`。

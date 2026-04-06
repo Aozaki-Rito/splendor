@@ -11,3 +11,7 @@ pytest==7.4.0
 httpx==0.27.2
 pygame==2.6.1
 colorama==0.4.6
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+sb3-contrib==2.3.0
+tensorboard==2.19.0

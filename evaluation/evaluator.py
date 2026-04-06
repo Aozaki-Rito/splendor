@@ -86,6 +86,8 @@ class Evaluator:
         
         # 创建游戏
         game = Game(players, seed=seed)
+        for agent in shuffled_agents:
+            agent._game = game
         
         # 游戏开始时的回调
         game_state = game.get_game_state()

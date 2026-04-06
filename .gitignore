@@ -38,6 +38,8 @@ test_results/
 log/
 agents/langgraph_agent_memory.json
 scripts/__pycache__/
+runs/
+models/
 
 # 配置文件
 .env
