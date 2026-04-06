@@ -45,9 +45,9 @@ class OpenAIClient(BaseLLMClient):
         if self.http_proxy or self.https_proxy:
             proxies = {}
             if self.http_proxy:
-                proxies["http"] = self.http_proxy
+                proxies["http://"] = self.http_proxy
             if self.https_proxy:
-                proxies["https"] = self.https_proxy
+                proxies["https://"] = self.https_proxy
             
             print(f"使用代理设置: {proxies}")
             try:
@@ -109,6 +109,75 @@ class OpenAIClient(BaseLLMClient):
             return response.choices[0].message.content
         except Exception as e:
             print(f"OpenAI API调用出错: {e}")
+            return ""
+
+
+class OpenAICompatibleClient(BaseLLMClient):
+    """兼容 OpenAI Chat Completions 接口的客户端"""
+
+    def __init__(self, config: Dict[str, Any]):
+        self.api_key = config.get("api_key")
+        if not self.api_key:
+            raise ValueError("未提供API密钥，请在配置文件中设置api_key或通过环境变量提供")
+
+        self.model_name = config.get("model_name")
+        if not self.model_name:
+            raise ValueError("未提供model_name，请在配置文件中设置兼容模型名称")
+
+        self.base_url = config.get("base_url")
+        if not self.base_url:
+            raise ValueError("未提供base_url，请在配置文件中设置兼容接口地址")
+
+        self.temperature = config.get("temperature", 0.5)
+        self.max_tokens = config.get("max_tokens", 500)
+        self.http_proxy = config.get("http_proxy") or os.environ.get("HTTP_PROXY")
+        self.https_proxy = config.get("https_proxy") or os.environ.get("HTTPS_PROXY")
+
+        client_kwargs = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+        }
+
+        if self.http_proxy or self.https_proxy:
+            proxies = {}
+            if self.http_proxy:
+                proxies["http://"] = self.http_proxy
+            if self.https_proxy:
+                proxies["https://"] = self.https_proxy
+
+            print(f"使用代理设置: {proxies}")
+            try:
+                import httpx
+                client_kwargs["http_client"] = httpx.Client(proxies=proxies)
+            except (ImportError, TypeError) as e:
+                print(f"无法设置代理 (使用httpx): {e}")
+
+        print(f"初始化兼容OpenAI客户端: model={self.model_name}, base_url={self.base_url}")
+
+        try:
+            self.client = OpenAI(**client_kwargs)
+        except Exception as e:
+            raise ValueError(f"无法初始化兼容OpenAI客户端: {e}")
+
+    def get_completion(self, system_prompt: str, user_prompt: str,
+                      temperature: Optional[float] = None,
+                      max_tokens: Optional[int] = None) -> str:
+        temp = temperature if temperature is not None else self.temperature
+        tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=temp,
+                max_tokens=tokens
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"兼容OpenAI接口调用出错: {e}")
             return ""
 
 
@@ -208,7 +277,9 @@ def create_llm_client(config: Dict[str, Any]) -> BaseLLMClient:
     
     if client_type == "openai":
         return OpenAIClient(config)
+    elif client_type in ("openai_compatible", "doubao", "ark"):
+        return OpenAICompatibleClient(config)
     elif client_type == "azure_openai":
         return AzureOpenAIClient(config)
     else:
-        raise ValueError(f"不支持的LLM类型: {client_type}") 
+        raise ValueError(f"不支持的LLM类型: {client_type}")

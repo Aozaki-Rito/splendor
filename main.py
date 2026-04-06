@@ -7,6 +7,7 @@ import json
 import argparse
 import time
 import random
+import shutil
 from threading import Thread
 from typing import List, Dict, Any
 from pathlib import Path
@@ -19,6 +20,7 @@ from game.player import Player
 from agents.base_agent import BaseAgent
 from agents.random_agent import RandomAgent
 from agents.llm_agent import LLMAgent
+from agents.rule_based_agent import RuleBasedAgent
 from agents.langgraph_agent import LanggraphAgent
 from ui.renderer import GameRenderer
 from evaluation.evaluator import Evaluator
@@ -27,9 +29,110 @@ from utils.llm_factory import create_llm_client
 from ui.pygame_ui import PygameUI
 
 
+def resolve_model_api_key(model_config: Dict[str, Any]):
+    """解析模型配置对应的 API Key。"""
+    env_key = model_config.get("api_key_env") or f"{model_config.get('type', '').upper()}_API_KEY"
+    api_key = model_config.get("api_key") or os.environ.get(env_key)
+    return api_key, env_key
+
+
+def create_agent_from_model_config(
+    model_config: Dict[str, Any],
+    player_id: str,
+    run_id: str,
+    temperature_override: Any,
+    use_langgraph: int,
+):
+    """根据模型配置创建代理，并返回 (agent, mode_label)。"""
+    prompt_strategy = model_config.get("prompt_strategy", "legacy")
+    temperature = temperature_override if temperature_override is not None else model_config.get("temperature", 0.5)
+
+    if use_langgraph == 1:
+        api_key, _ = resolve_model_api_key(model_config)
+        if not api_key:
+            raise ValueError("langgraph 模式需要提供 API Key。")
+        agent = LanggraphAgent(
+            player_id=player_id,
+            name=f"{model_config.get('name')} 代理",
+            api_key=api_key,
+            model_name=model_config.get("model_name"),
+            temperature=temperature,
+            max_tokens=model_config.get("max_tokens", 500),
+            base_url=model_config.get("base_url"),
+            model_type=model_config.get("type", "openai_compatible"),
+            api_version=model_config.get("api_version"),
+            deployment_name=model_config.get("deployment_name"),
+            run_id=run_id,
+        )
+        return agent, "langgraph"
+
+    if prompt_strategy == "rank_v2_auto":
+        agent = RuleBasedAgent(
+            player_id=player_id,
+            name=f"{model_config.get('name')} 代理",
+            candidate_action_limit=model_config.get("candidate_action_limit", 6),
+            target_limit=model_config.get("target_limit", 4),
+            noble_limit=model_config.get("noble_limit", 3),
+            run_id=run_id,
+        )
+        return agent, "rule_based"
+
+    api_key, _ = resolve_model_api_key(model_config)
+    if not api_key:
+        raise ValueError("legacy 模式需要提供 API Key。")
+
+    llm_client = create_llm_client(model_config)
+    agent = LLMAgent(
+        player_id=player_id,
+        name=f"{model_config.get('name')} 代理",
+        llm_client=llm_client,
+        temperature=temperature,
+        max_tokens=model_config.get("max_tokens", 500),
+        prompt_strategy=prompt_strategy,
+        run_id=run_id,
+    )
+    return agent, "legacy"
+
+
+def create_run_dir(run_id: str, mode: str, args: argparse.Namespace, config: Dict[str, Any]) -> Path:
+    """为当前运行创建独立的产物目录，并保存参数快照。"""
+    run_dir = Path("results") / "runs" / f"{run_id}_{mode}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    metadata = {
+        "run_id": run_id,
+        "mode": mode,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "cwd": str(Path.cwd()),
+    }
+
+    with open(run_dir / "run_metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+    with open(run_dir / "cli_args.json", "w", encoding="utf-8") as f:
+        json.dump(vars(args), f, ensure_ascii=False, indent=2)
+
+    with open(run_dir / "config_snapshot.json", "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+    if args.config and os.path.exists(args.config):
+        shutil.copy2(args.config, run_dir / "config_source.json")
+
+    return run_dir
+
+
+def save_game_history_artifact(game: Game, run_dir: Path, file_name: str = "game_history.json") -> Path:
+    """将当前游戏历史保存到运行目录。"""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    history_path = run_dir / file_name
+    game.save_game_history(str(history_path))
+    return history_path
+
+
 def run_game_with_render(args):
     """运行单个游戏"""
     console = Console()
+    run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
     
     # 加载配置
     try:
@@ -37,6 +140,8 @@ def run_game_with_render(args):
     except FileNotFoundError as e:
         console.print(f"[bold red]错误：{e}[/bold red]")
         return
+    run_dir = create_run_dir(run_id, "game", args, config)
+    console.print(f"[blue]运行产物目录: {run_dir}[/blue]")
     
     # 获取游戏设置
     game_settings = get_game_settings(config)
@@ -74,43 +179,30 @@ def run_game_with_render(args):
         if model_config:
             try:
                 console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
-                
-                # 检查API密钥
-                api_key = model_config.get("api_key")
-                if not api_key:
-                    env_key = f"{model_config.get('type', '').upper()}_API_KEY"
-                    api_key = os.environ.get(env_key)
-                    
-                if not api_key:
-                    console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
-                    continue
-                
-                # 创建LLM客户端
-                console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+                prompt_strategy = model_config.get("prompt_strategy", "legacy")
                 if args.use_langgraph == 1:
-                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                    
-                    agent = LanggraphAgent(
-                            player_id=f"llm_agent_{i+1}",
-                            name=f"{model_config.get('name')} 代理",
-                            api_key=api_key,
-                            model_name=model_config.get("model_name"),
-                            temperature=temperature,
-                            max_tokens=model_config.get("max_tokens", 500)
-                        )
+                    api_key, env_key = resolve_model_api_key(model_config)
+                    if not api_key:
+                        console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+                        continue
+                    console.print(f"[cyan]创建LangGraph代理: 模型={model_config.get('model_name')}[/cyan]")
+                elif prompt_strategy == "rank_v2_auto":
+                    console.print("[cyan]创建纯规则代理: rank_v2_auto[/cyan]")
                 else:
-                    llm_client = create_llm_client(model_config)
-                    
-                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                    
-                    agent = LLMAgent(
-                        player_id=f"llm_agent_{i+1}",
-                        name=f"{model_config.get('name')} 代理",
-                        llm_client=llm_client,
-                        temperature=temperature
-                    )
+                    api_key, env_key = resolve_model_api_key(model_config)
+                    if not api_key:
+                        console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+                        continue
+                    console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+
+                agent, _ = create_agent_from_model_config(
+                    model_config=model_config,
+                    player_id=f"llm_agent_{i+1}",
+                    run_id=run_id,
+                    temperature_override=args.temperature,
+                    use_langgraph=args.use_langgraph,
+                )
+                console.print(f"[blue]代理日志文件: {agent.log_file_path}[/blue]")
 
                 agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
@@ -158,9 +250,13 @@ def run_game_with_render(args):
 
     # 初始渲染
     renderer.render()
+    executed_turns = 0
     
     # 运行游戏直到结束
     while not game.game_over:
+        if args.max_turns is not None and executed_turns >= args.max_turns:
+            console.print(f"[yellow]已达到测试回合上限: {args.max_turns}，提前停止。[/yellow]")
+            break
         current_player = game.get_current_player()
         current_agent = next((a for a in agents if a._player == current_player), None)
         
@@ -193,6 +289,7 @@ def run_game_with_render(args):
                 # 回合结束
                 game_state = game.get_game_state()
                 current_agent.on_turn_end(game_state, selected_action, success)
+                executed_turns += 1
             else:
                 console.print("没有有效动作，跳过")
         
@@ -218,13 +315,10 @@ def run_game_with_render(args):
     
     # 保存游戏历史
     if save_history:
-        os.makedirs("results", exist_ok=True)
-        timestamp = int(time.time())
-        history_file = os.path.join("results", f"game_history_{timestamp}.json")
-        game.save_game_history(history_file)
+        history_file = save_game_history_artifact(game, run_dir)
         console.print(f"\n游戏历史已保存到: {history_file}")
 
-def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_history: bool = False, seed: int = None, players: List[Player] = None):
+def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_history: bool = False, seed: int = None, players: List[Player] = None, run_dir: Path = None):
     """游戏逻辑线程入口"""
     # 运行游戏直到结束
     console = Console()
@@ -238,8 +332,14 @@ def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_histo
     game_state = game.get_game_state()
     for agent in agents:
         agent.on_game_start(game_state)
+    max_turns = getattr(game, "max_turns", None)
+    executed_turns = 0
 
     while not game.game_over:
+        if max_turns is not None and executed_turns >= max_turns:
+            console.print(f"[yellow]已达到测试回合上限: {max_turns}，提前停止逻辑线程。[/yellow]")
+            game.game_over = True
+            break
         current_player = game.get_current_player()
         current_agent = next((a for a in agents if a._player == current_player), None)
         
@@ -268,6 +368,7 @@ def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_histo
                 # 回合结束
                 game_state = game.get_game_state()
                 current_agent.on_turn_end(game_state, selected_action, success)
+                executed_turns += 1
         
         # 进入下一个玩家
         game.next_player()
@@ -284,15 +385,13 @@ def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_histo
         agent.on_game_end(game_state, winner_ids)
     
     # 保存游戏历史
-    if save_history:
-        os.makedirs("results", exist_ok=True)
-        timestamp = int(time.time())
-        history_file = os.path.join("results", f"game_history_{timestamp}.json")
-        game.save_game_history(history_file)
+    if save_history and run_dir is not None:
+        save_game_history_artifact(game, run_dir)
 
 def run_game_with_pygame(args):
     """运行单个游戏"""
     console = Console()
+    run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
 
     # 加载配置
     try:
@@ -300,6 +399,8 @@ def run_game_with_pygame(args):
     except FileNotFoundError as e:
         console.print(f"[bold red]错误：{e}[/bold red]")
         return
+    run_dir = create_run_dir(run_id, "pygame_game", args, config)
+    console.print(f"[blue]运行产物目录: {run_dir}[/blue]")
 
     # 获取游戏设置
     game_settings = get_game_settings(config)
@@ -336,43 +437,30 @@ def run_game_with_pygame(args):
         if model_config:
             try:
                 console.print(f"[cyan]正在创建{model_name}代理...[/cyan]")
-                
-                # 检查API密钥
-                api_key = model_config.get("api_key")
-                if not api_key:
-                    env_key = f"{model_config.get('type', '').upper()}_API_KEY"
-                    api_key = os.environ.get(env_key)
-                    
-                if not api_key:
-                    console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
-                    continue
-                
-                # 创建LLM客户端
-                console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+                prompt_strategy = model_config.get("prompt_strategy", "legacy")
                 if args.use_langgraph == 1:
-                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                    
-                    agent = LanggraphAgent(
-                            player_id=f"llm_agent_{i+1}",
-                            name=f"{model_config.get('name')} 代理",
-                            api_key=api_key,
-                            model_name=model_config.get("model_name"),
-                            temperature=temperature,
-                            max_tokens=model_config.get("max_tokens", 500)
-                        )
+                    api_key, env_key = resolve_model_api_key(model_config)
+                    if not api_key:
+                        console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+                        continue
+                    console.print(f"[cyan]创建LangGraph代理: 模型={model_config.get('model_name')}[/cyan]")
+                elif prompt_strategy == "rank_v2_auto":
+                    console.print("[cyan]创建纯规则代理: rank_v2_auto[/cyan]")
                 else:
-                    llm_client = create_llm_client(model_config)
-                    
-                    # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-                    temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-                    
-                    agent = LLMAgent(
-                        player_id=f"llm_agent_{i+1}",
-                        name=f"{model_config.get('name')} 代理",
-                        llm_client=llm_client,
-                        temperature=temperature
-                    )
+                    api_key, env_key = resolve_model_api_key(model_config)
+                    if not api_key:
+                        console.print(f"[bold red]错误: {model_name}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+                        continue
+                    console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+
+                agent, _ = create_agent_from_model_config(
+                    model_config=model_config,
+                    player_id=f"llm_agent_{i+1}",
+                    run_id=run_id,
+                    temperature_override=args.temperature,
+                    use_langgraph=args.use_langgraph,
+                )
+                console.print(f"[blue]代理日志文件: {agent.log_file_path}[/blue]")
 
                 agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
@@ -405,10 +493,11 @@ def run_game_with_pygame(args):
     
     # 创建游戏
     game = Game(players, seed=seed)
+    game.max_turns = args.max_turns
     pygame_ui = PygameUI(game)
 
     # 启动游戏逻辑线程
-    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay, save_history, seed, players), daemon=True)
+    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay, save_history, seed, players, run_dir), daemon=True)
     logic_thread.start()
 
     # 主线程负责渲染
@@ -419,6 +508,7 @@ def run_evaluation(args):
     """运行评估"""
     console = Console()
     console.print("[bold cyan]========== 璀璨宝石 LLM 代理评估 ==========[/bold cyan]")
+    run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
     
     # 加载配置
     try:
@@ -426,6 +516,8 @@ def run_evaluation(args):
     except FileNotFoundError as e:
         console.print(f"[bold red]错误：{e}[/bold red]")
         return
+    run_dir = create_run_dir(run_id, "evaluation", args, config)
+    console.print(f"[blue]运行产物目录: {run_dir}[/blue]")
     
     # 获取评估设置
     eval_settings = get_evaluation_settings(config)
@@ -442,19 +534,25 @@ def run_evaluation(args):
     
     if model_config:
         try:
-            # 创建LLM客户端
-            llm_client = create_llm_client(model_config)
-            
-            # 使用配置的温度参数，如果命令行指定则优先使用命令行参数
-            temperature = args.temperature if args.temperature is not None else model_config.get("temperature", 0.5)
-            
-            agent = LLMAgent(
+            prompt_strategy = model_config.get("prompt_strategy", "legacy")
+            if prompt_strategy == "rank_v2_auto":
+                console.print("[cyan]创建纯规则代理: rank_v2_auto[/cyan]")
+            else:
+                api_key, env_key = resolve_model_api_key(model_config)
+                if not api_key:
+                    console.print(f"[bold red]错误: {args.model}没有提供API密钥。请在config.json中设置api_key或通过{env_key}环境变量提供[/bold red]")
+                    return
+                console.print(f"[cyan]创建LLM客户端: 类型={model_config.get('type')}, 模型={model_config.get('model_name')}[/cyan]")
+
+            agent, _ = create_agent_from_model_config(
+                model_config=model_config,
                 player_id="llm_agent",
-                name=f"{model_config.get('name')}",
-                llm_client=llm_client,
-                temperature=temperature
+                run_id=run_id,
+                temperature_override=args.temperature,
+                use_langgraph=0,
             )
             agents.append(agent)
+            console.print(f"[blue]代理日志文件: {agent.log_file_path}[/blue]")
         except Exception as e:
             console.print(f"[bold red]创建LLM代理失败：{e}[/bold red]")
     
@@ -469,7 +567,7 @@ def run_evaluation(args):
     evaluator = Evaluator(agents, num_games=num_games, seed=seed)
     
     # 运行评估
-    results = evaluator.run_evaluation()
+    results = evaluator.run_evaluation(output_dir=str(run_dir))
     
     # 显示结果摘要
     console.print("\n[bold yellow]评估结果摘要:[/bold yellow]")
@@ -515,7 +613,8 @@ def list_models(args):
         model_id = model.get("model_name", "未知")
         
         # 检查API密钥是否可用
-        api_key = model.get("api_key") or os.environ.get(f"{model_type.upper()}_API_KEY")
+        env_key = model.get("api_key_env") or f"{model_type.upper()}_API_KEY"
+        api_key = model.get("api_key") or os.environ.get(env_key)
         api_status = "[green]是[/green]" if api_key else "[red]否[/red]"
         
         table.add_row(name, model_type, model_id, api_status)
@@ -544,6 +643,7 @@ def main():
     game_parser.add_argument("--save-history", action="store_true", help="保存游戏历史")
     game_parser.add_argument("--use_pygame", type=int, choices=[0,1], default=1, help="是否使用pygame图形界面")
     game_parser.add_argument("--use_langgraph", type=int, choices=[0,1], default=0, help="是否使用langgraph代理")
+    game_parser.add_argument("--max-turns", type=int, help="测试时最多执行的回合数")
     
 
     # 为每个可能的LLM代理添加特定的模型参数

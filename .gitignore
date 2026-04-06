@@ -35,10 +35,13 @@ ENV/
 results/
 test_results/
 *.out
-*.sh
+log/
+agents/langgraph_agent_memory.json
+scripts/__pycache__/
 
 # 配置文件
 .env
 
 # 保留示例配置文件
-!config_example.json 
+!config_example.json
+!scripts/*.sh

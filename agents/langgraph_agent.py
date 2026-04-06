@@ -1,12 +1,12 @@
 import random
 import operator
 import json
+import re
 from dataclasses import dataclass
 from pydantic import BaseModel, Field
 from typing import TypedDict, List, Dict, Any, Annotated, Tuple
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.embeddings import init_embeddings
 from langchain.chat_models import init_chat_model
 from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
@@ -21,6 +21,7 @@ from utils.log import CustomLogger
 @dataclass
 class ContextSchema:
     models: Dict[str, Any] = None
+    llm: Any = None
     store: InMemoryStore = None
     logger: CustomLogger = None
     player_id: str = None
@@ -46,6 +47,186 @@ class AgentState(TypedDict):
     action_choice: ActionChoice = Field(description="当前动作索引")
     valid_actions: List[str] = Field(description="当前游戏状态下可用的动作")
 
+
+def _extract_text_content(response: Any) -> str:
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(text)
+            else:
+                text = getattr(item, "text", None)
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
+def _parse_json_object(text: str) -> Dict[str, Any]:
+    cleaned = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    if fence_match:
+        cleaned = fence_match.group(1)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"(\{.*\})", cleaned, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+    return {}
+
+
+def _invoke_prompt(runtime: Runtime[ContextSchema], prompt_key: str, payload: Dict[str, Any]) -> str:
+    prompt = runtime.context.models[prompt_key].invoke(payload)
+    response = runtime.context.llm.invoke(prompt)
+    text = _extract_text_content(response)
+    runtime.context.logger.log_info(
+        {
+            "prompt_key": prompt_key,
+            "raw_response_preview": text[:1200],
+            "response_metadata": getattr(response, "response_metadata", {}),
+        }
+    )
+    return text
+
+
+def _build_compact_state_digest(game_state: Dict[str, Any]) -> str:
+    players = game_state.get("players", [])
+    current_idx = game_state.get("current_player", 0)
+    board = game_state.get("board", {})
+
+    def compact_player(player: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "name": player.get("name"),
+            "score": player.get("score", 0),
+            "gems": {k: v for k, v in player.get("gems", {}).items() if v},
+            "discounts": {k: v for k, v in player.get("card_discounts", {}).items() if v},
+            "reserved": [card.get("id") for card in player.get("reserved_cards", [])[:3]],
+        }
+
+    displayed_cards = []
+    for level, cards in board.get("displayed_cards", {}).items():
+        for card in cards:
+            displayed_cards.append(
+                {
+                    "id": card.get("id"),
+                    "level": level,
+                    "points": card.get("points", 0),
+                    "color": card.get("color"),
+                    "cost": card.get("cost", {}),
+                }
+            )
+
+    digest = {
+        "round": game_state.get("round"),
+        "current_player": players[current_idx].get("name") if players else None,
+        "me": compact_player(players[current_idx]) if players else {},
+        "opponents": [compact_player(player) for i, player in enumerate(players) if i != current_idx],
+        "board_gems": board.get("gems", {}),
+        "displayed_cards": displayed_cards[:12],
+        "nobles": board.get("nobles", []),
+    }
+    return json.dumps(digest, ensure_ascii=False, separators=(",", ":"))
+
+
+def _invoke_compact_retry(runtime: Runtime[ContextSchema], prompt_name: str, instruction: str, game_state: Dict[str, Any]) -> str:
+    compact_state = _build_compact_state_digest(game_state)
+    response = runtime.context.llm.invoke(
+        f"{instruction}\n当前局面摘要:{compact_state}"
+    )
+    text = _extract_text_content(response)
+    runtime.context.logger.log_info(
+        {
+            "prompt_key": prompt_name,
+            "compact_retry_preview": text[:1200],
+            "response_metadata": getattr(response, "response_metadata", {}),
+        }
+    )
+    return text
+
+
+def _parse_plan_text(text: str) -> Plan:
+    data = _parse_json_object(text)
+    if data:
+        steps = [str(step).strip() for step in data.get("steps", []) if str(step).strip()]
+        reason = str(data.get("reason", "")).strip()
+        if steps:
+            return Plan(steps=steps, reason=reason or "根据当前局势生成计划。")
+
+    steps = []
+    reason = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^(\d+[\.\)]|[-*])\s*", stripped):
+            steps.append(re.sub(r"^(\d+[\.\)]|[-*])\s*", "", stripped).strip())
+        elif stripped.startswith("原因") or stripped.startswith("思路"):
+            reason = stripped.split(":", 1)[-1].split("：", 1)[-1].strip()
+
+    if not steps:
+        steps = ["优先获取能尽快转化为卡牌和分数的资源。"]
+    if not reason:
+        reason = "根据当前棋盘、资源与可行动作生成计划。"
+    return Plan(steps=steps[:5], reason=reason)
+
+
+def _parse_action_choice_text(text: str, valid_actions: List[str]) -> ActionChoice:
+    data = _parse_json_object(text)
+    if data and "action_index" in data:
+        try:
+            idx = int(data["action_index"])
+            return ActionChoice(action_index=max(1, min(len(valid_actions), idx)))
+        except (TypeError, ValueError):
+            pass
+
+    patterns = [
+        r"action_index\s*[:：]\s*(\d+)",
+        r"选择动作\s*[:：]\s*(\d+)",
+        r"动作\s*(\d+)",
+        r"^\s*(\d+)\s*$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.MULTILINE)
+        if match:
+            idx = int(match.group(1))
+            return ActionChoice(action_index=max(1, min(len(valid_actions), idx)))
+
+    return ActionChoice(action_index=1)
+
+
+def _parse_reflexion_text(text: str) -> Reflexion:
+    data = _parse_json_object(text)
+    if data:
+        summary = str(data.get("summary", "")).strip()
+        thought = str(data.get("thought", "")).strip()
+        if summary or thought:
+            return Reflexion(
+                summary=summary or "需要继续根据最新局势调整策略。",
+                thought=thought or "优先保持资源效率并推进高价值目标。",
+            )
+
+    summary = ""
+    thought = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("总结"):
+            summary = stripped.split(":", 1)[-1].split("：", 1)[-1].strip()
+        elif stripped.startswith("思路"):
+            thought = stripped.split(":", 1)[-1].split("：", 1)[-1].strip()
+
+    return Reflexion(
+        summary=summary or "需要继续观察双方资源、目标卡和贵族推进情况。",
+        thought=thought or "优先选择能提升下回合买牌概率的动作。",
+    )
+
 def plan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState: 
     logger = runtime.context.logger
     logger.log_info("\n====== [DEBUG] ENTER plan_node ======")
@@ -53,10 +234,17 @@ def plan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState:
     logger.log_info("Raw game_state:" + str(json.dumps(state["game_state"], ensure_ascii=False)))
     
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
-    model = runtime.context.models["plan"]
-    response = model.invoke({
-        "formatted_state": formatted_state
-    })
+    response_text = _invoke_compact_retry(
+        runtime,
+        "plan_compact",
+        "请基于下述璀璨宝石局面摘要生成很短的 JSON 计划。只输出 {\"steps\":[\"步骤1\",\"步骤2\"],\"reason\":\"一句话原因\"}。",
+        state["game_state"],
+    )
+    if not response_text:
+        response_text = _invoke_prompt(runtime, "plan", {
+            "formatted_state": formatted_state
+        })
+    response = _parse_plan_text(response_text)
 
     logger.log_info("====== [DEBUG] EXIT plan_node ======\n")
     logger.log_info("plan_node output plan:" + str(response.steps))
@@ -85,18 +273,34 @@ def think_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentState
     logger.log_info("[DEBUG] valid_actions:" + str(state["valid_actions"]))
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
-    model = runtime.context.models["think"]
     plan = state["plan"]
     plan_str = "\n".join(f"{i + 1}. {step}" for i, step in enumerate(plan))
     task = plan[0]
 
     actions_for_llm = "\n".join(state["valid_actions"])
-    response = model.invoke({
+    response_text = _invoke_prompt(runtime, "think", {
         "formatted_state": formatted_state,
         "plan": plan_str,
         "task": task,
         "valid_actions": actions_for_llm
     })
+    if not response_text:
+        compact_actions = "\n".join(state["valid_actions"][:12])
+        response = runtime.context.llm.invoke(
+            f"你是璀璨宝石策略代理。只输出 JSON：{{\"action_index\": 1}}。\n"
+            f"当前任务:{task}\n"
+            f"当前局面摘要:{_build_compact_state_digest(state['game_state'])}\n"
+            f"可用动作(截断前12项):\n{compact_actions}"
+        )
+        response_text = _extract_text_content(response)
+        logger.log_info(
+            {
+                "prompt_key": "think_retry",
+                "compact_retry_preview": response_text[:1200],
+                "response_metadata": getattr(response, "response_metadata", {}),
+            }
+        )
+    response = _parse_action_choice_text(response_text, state["valid_actions"])
 
     logger.log_info("[DEBUG] think_node response:" + str(response))
     logger.log_info("====== [DEBUG] EXIT think_node ======\n")
@@ -145,11 +349,10 @@ def reflexion_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentS
     logger.log_info(f"[DEBUG] memory items found: {len(items)}")
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
-    model = runtime.context.models["reflexion"]
     memory = items[-5:]
     reflexion = state.get("reflexion", Reflexion(summary="", thought=""))
 
-    response = model.invoke({
+    response_text = _invoke_prompt(runtime, "reflexion", {
         "formatted_state": formatted_state,
         "plan": state["plan"],
         "past_steps": state["past_steps"],
@@ -158,6 +361,14 @@ def reflexion_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentS
         "summary": reflexion.summary,
         "thought": reflexion.thought
     })
+    if not response_text:
+        response_text = _invoke_compact_retry(
+            runtime,
+            "reflexion_retry",
+            "请基于下述璀璨宝石局面摘要输出 JSON：{\"summary\":\"一句话总结\",\"thought\":\"一句话思路\"}。",
+            state["game_state"],
+        )
+    response = _parse_reflexion_text(response_text)
 
     logger.log_info("[DEBUG] reflexion_node new reflexion:" + str(response))
     logger.log_info("====== [DEBUG] EXIT reflexion_node ======\n")
@@ -173,13 +384,20 @@ def replan_node(state: AgentState, runtime: Runtime[ContextSchema]) -> AgentStat
     logger.log_info("[DEBUG] past_steps:" + str(state["past_steps"]))
 
     formatted_state = json.dumps(state["game_state"], indent=2, ensure_ascii=False)
-    model = runtime.context.models["replan"]
-    response = model.invoke({
+    response_text = _invoke_prompt(runtime, "replan", {
         "formatted_state": formatted_state,
         "plan": state["plan"],
         "past_steps": state["past_steps"],
         "valid_actions": state["valid_actions"]
     })
+    if not response_text:
+        response_text = _invoke_compact_retry(
+            runtime,
+            "replan_retry",
+            "请基于下述璀璨宝石局面摘要输出很短的 JSON 新计划：{\"steps\":[\"步骤1\",\"步骤2\"],\"reason\":\"一句话原因\"}。",
+            state["game_state"],
+        )
+    response = _parse_plan_text(response_text)
 
     logger.log_info("[DEBUG] new plan:" + str(response.steps))
     logger.log_info("====== [DEBUG] EXIT replan_node ======\n")
@@ -195,27 +413,51 @@ def should_end(state: AgentState):
 
 class LanggraphAgent(BaseAgent):
     """基于LLM的代理"""
-    def __init__(self, player_id: str, name: str, model_name: str, api_key: str, temperature: float = 0.5, max_tokens: int = 500):
+    def __init__(
+        self,
+        player_id: str,
+        name: str,
+        model_name: str,
+        api_key: str,
+        temperature: float = 0.5,
+        max_tokens: int = 500,
+        base_url: str = None,
+        model_type: str = "openai_compatible",
+        api_version: str = None,
+        deployment_name: str = None,
+        run_id: str = None,
+    ):
         super().__init__(player_id, name)
-        self.llm = init_chat_model(model_name,temperature=temperature,max_tokens=max_tokens,api_key=api_key)
-
-        self.plan_chain = self._construct_plan_prompt() | self.llm.with_structured_output(Plan)
-        self.think_chain = self._construct_think_prompt() | self.llm.with_structured_output(ActionChoice)
-        self.reflexion_chain = self._construct_reflexion_prompt() | self.llm.with_structured_output(Reflexion)
-        self.replan_chain = self._construct_replan_prompt() | self.llm.with_structured_output(Plan)
-        self.models = {
-            "plan": self.plan_chain,
-            "think": self.think_chain,
-            "reflexion": self.reflexion_chain,
-            "replan": self.replan_chain
+        max_tokens = max(int(max_tokens), 512)
+        provider = self._resolve_model_provider(model_type)
+        chat_kwargs = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "api_key": api_key,
         }
-        embeddings = init_embeddings("openai:text-embedding-3-small",api_key=api_key)
-        self.store = InMemoryStore(
-            index={
-                "embed": embeddings,
-                "dims": 1536,
-            }
+        if provider == "azure_openai":
+            if base_url:
+                chat_kwargs["azure_endpoint"] = base_url
+            if api_version:
+                chat_kwargs["api_version"] = api_version
+            if deployment_name:
+                chat_kwargs["azure_deployment"] = deployment_name
+        elif base_url:
+            chat_kwargs["base_url"] = base_url
+
+        self.llm = init_chat_model(
+            model_name,
+            model_provider=provider,
+            **chat_kwargs
         )
+
+        self.models = {
+            "plan": self._construct_plan_prompt(),
+            "think": self._construct_think_prompt(),
+            "reflexion": self._construct_reflexion_prompt(),
+            "replan": self._construct_replan_prompt(),
+        }
+        self.store = InMemoryStore()
         self.key_count = 0
 
         builder = StateGraph(AgentState, context_schema=ContextSchema)
@@ -237,10 +479,25 @@ class LanggraphAgent(BaseAgent):
         self.agent = builder.compile(checkpointer=checkpointer)
         self.config = {"configurable": {"thread_id": f"{self.player_id}"}}
 
-        self.logger = CustomLogger('./log/llm.log')
+        log_path = "./log/llm.log"
+        if run_id:
+            log_path = f"./log/langgraph_{run_id}.log"
+        self.log_file_path = log_path
+        self.logger = CustomLogger(log_path)
         self.logger.enable_file_logging()
 
-        self.ctx = ContextSchema(models=self.models,store=self.store,logger=self.logger,player_id=self.player_id)   
+        self.ctx = ContextSchema(models=self.models, llm=self.llm, store=self.store, logger=self.logger, player_id=self.player_id)   
+
+    def _resolve_model_provider(self, model_type: str) -> str:
+        mapping = {
+            "openai": "openai",
+            "doubao": "openai",
+            "ark": "openai",
+            "openai_compatible": "openai",
+            "azure_openai": "azure_openai",
+            "azure": "azure_openai",
+        }
+        return mapping.get(model_type, "openai")
 
     def select_action(self, game_state, valid_actions):
         logger = self.logger
@@ -301,35 +558,17 @@ class LanggraphAgent(BaseAgent):
             [
                 (
                     "system",
-                    """你是一名璀璨宝石(Splendor)游戏的AI玩家。你的目标是通过策略性地收集宝石、购买卡牌和吸引贵族，尽可能快地获得15分。
-                        游戏规则:
-                        1. 每回合你可以执行以下操作之一:
-                        - 拿取3个不同颜色的宝石代币
-                        - 拿取2个相同颜色的宝石代币(该颜色的代币数量至少为4个)
-                        - 购买一张面朝上的发展卡或预留的卡
-                        - 预留一张发展卡并获得一个金色宝石(黄金)
-                        2. 你最多持有10个宝石代币，超过需要丢弃
-                        3. 当你的发展卡达到一位贵族的要求时，该贵族会立即访问你，提供额外的胜利点数，每次执行操作后你至多可以选择被一位满足条件的贵族访问
-                        4. 游戏在一位玩家达到15分后，剩余玩家依次完成一个回合之后游戏结束
-                        策略提示:
-                        - 注意平衡短期与长期利益
-                        - 考虑其他玩家可能的行动
-                        - 关注贵族卡的要求
-                        - 预留对你重要或对对手有价值的卡牌
-                        - 留意游戏板上的卡牌分布
-                        请你想出一个一步一步的计划，这个计划应该最终指引你获得游戏胜利。
-                        由于游戏局势不断变化，你的计划可能只是需要在未来数个回合中被完成，不需要完美地预测到所有情况，你只需要保证你接下来的几个计划对于最终胜利是有帮助的。 
-                        这个计划应该包括单独的任务，这个任务可能需要多个回合去完成，
-                        例如你可能需要三到四个回合来搜集宝石并兑换第二级别的第一张卡，或者你可能需要预先扣留第三级别的某一张七分卡并再接下来三个回合兑换它。
-                        确保每一步都有所有需要的信息——不要跳过任何步骤。""",
+                    """你是璀璨宝石策略代理。目标是尽快获得 15 分。
+只输出极短的 JSON，不要解释，不要 markdown。
+计划只需要未来 1 到 3 步，优先考虑买牌、折扣、贵族和分数。""",
                 ),
                 (
                     "human",
                     """
-                    请分析当前的游戏状态，按照要求制定游戏计划。
-                    当前游戏开始，状态如下:
+                    根据当前游戏状态，生成一个短计划。
                     {formatted_state}
-                    请给出计划以及对应的思路。
+                    请只输出 JSON，格式如下：
+                    {{"steps":["步骤1","步骤2"],"reason":"一句话原因"}}
                     """
                 )
             ]
@@ -341,36 +580,23 @@ class LanggraphAgent(BaseAgent):
             [
                 (
                     "system",
-                    """你是一名璀璨宝石(Splendor)游戏的AI玩家。你的目标是通过策略性地收集宝石、购买卡牌和吸引贵族，尽可能快地获得15分。
-                        游戏规则:
-                        1. 每回合你可以执行以下操作之一:
-                        - 拿取3个不同颜色的宝石代币
-                        - 拿取2个相同颜色的宝石代币(该颜色的代币数量至少为4个)
-                        - 购买一张面朝上的发展卡或预留的卡
-                        - 预留一张发展卡并获得一个金色宝石(黄金)
-                        2. 你最多持有10个宝石代币，超过需要丢弃
-                        3. 当你的发展卡达到一位贵族的要求时，该贵族会立即访问你，提供额外的胜利点数，每次执行操作后你至多可以选择被一位满足条件的贵族访问
-                        4. 游戏在一位玩家达到15分后，剩余玩家依次完成一个回合之后游戏结束
-                        策略提示:
-                        - 注意平衡短期与长期利益
-                        - 考虑其他玩家可能的行动
-                        - 关注贵族卡的要求
-                        - 预留对你重要或对对手有价值的卡牌
-                        - 留意游戏板上的卡牌分布
-                        你需要自己分析当前的游戏局势，在合法动作中选择一项输出，以期达到最终的胜利。""",
+                    """你是璀璨宝石策略代理。
+从给定合法动作中选一个最优动作。
+优先：立即买牌 > 推进高价值目标 > 推进贵族 > 提高下回合买牌概率。
+只输出 JSON，不要解释。""",
                 ),
                 (
                     "human",
                     """
-                    请分析当前的游戏状态，并从以下可用动作中选择最佳动作。
                     当前游戏状态:
                     {formatted_state}
-                    你正在执行的计划是这样的：
+                    当前计划：
                     {plan}
-                    你目前需要执行计划的第一步，{task}。
-                    你的可用的动作是：
+                    当前任务：{task}
+                    可用动作：
                     {valid_actions}
-                    请你根据上述信息给出当前步骤的动作编号。
+                    请只输出 JSON，格式如下：
+                    {{"action_index": 1}}
                     """
                 )
             ]
@@ -382,45 +608,29 @@ class LanggraphAgent(BaseAgent):
             [
                 (
                     "system",
-                    """你是一名璀璨宝石(Splendor)游戏的AI玩家。你的目标是通过策略性地收集宝石、购买卡牌和吸引贵族，尽可能快地获得15分。
-                        游戏规则:
-                        1. 每回合你可以执行以下操作之一:
-                        - 拿取3个不同颜色的宝石代币
-                        - 拿取2个相同颜色的宝石代币(该颜色的代币数量至少为4个)
-                        - 购买一张面朝上的发展卡或预留的卡
-                        - 预留一张发展卡并获得一个金色宝石(黄金)
-                        2. 你最多持有10个宝石代币，超过需要丢弃
-                        3. 当你的发展卡达到一位贵族的要求时，该贵族会立即访问你，提供额外的胜利点数，每次执行操作后你至多可以选择被一位满足条件的贵族访问
-                        4. 游戏在一位玩家达到15分后，剩余玩家依次完成一个回合之后游戏结束
-                        策略提示:
-                        - 注意平衡短期与长期利益
-                        - 考虑其他玩家可能的行动
-                        - 关注贵族卡的要求
-                        - 预留对你重要或对对手有价值的卡牌
-                        - 留意游戏板上的卡牌分布
-                        你需要根据已有的信息对当前的游戏做出反思，反思包括总结和思路两个方面。
-                        总结的内容包括对游戏局势的分析，对自己打法的总结，对对手打法的分析或者其他你认为有必要的信息。
-                        思路则是你当前正在遵循的策略，这是你整局游戏的行动方针，它将指导你修改计划并在每一步思考做出何种行动。
-                        """,
+                    """你是璀璨宝石策略代理。
+根据最近几步和当前局势，给出一条简短总结和一条下一步思路。
+只输出 JSON，不要解释。""",
                 ),
                 (
                     "human",
                     """
-                    在过去的回合中，你已经做出了如下总结：
+                    旧总结：
                     {summary}
-                    当前你的思路是：
+                    旧思路：
                     {thought}
-                    过去一段时间内游戏的进程是（仅包含过去五步）：
+                    最近记忆：
                     {history}
                     当前游戏状态:
                     {formatted_state}
-                    你正在实施的计划是这样的：
+                    当前计划：
                     {plan}
-                    您目前针对之前的任务列表已经完成了如下工作(仅包含过去五步）：
+                    最近执行：
                     {past_steps}
-                    当前可用的动作是：
+                    当前动作：
                     {valid_actions}
-                    请你根据以上信息，给出新的总结和思路。
+                    请只输出 JSON，格式如下：
+                    {{"summary":"一句话总结","thought":"一句话策略思路"}}
                     """
                 )
             ]
@@ -432,45 +642,23 @@ class LanggraphAgent(BaseAgent):
             [
                 (
                     "system",
-                    """你是一名璀璨宝石(Splendor)游戏的AI玩家。你的目标是通过策略性地收集宝石、购买卡牌和吸引贵族，尽可能快地获得15分。
-                        游戏规则:
-                        1. 每回合你可以执行以下操作之一:
-                        - 拿取3个不同颜色的宝石代币
-                        - 拿取2个相同颜色的宝石代币(该颜色的代币数量至少为4个)
-                        - 购买一张面朝上的发展卡或预留的卡
-                        - 预留一张发展卡并获得一个金色宝石(黄金)
-                        2. 你最多持有10个宝石代币，超过需要丢弃
-                        3. 当你的发展卡达到一位贵族的要求时，该贵族会立即访问你，提供额外的胜利点数，每次执行操作后你至多可以选择被一位满足条件的贵族访问
-                        4. 游戏在一位玩家达到15分后，剩余玩家依次完成一个回合之后游戏结束
-                        策略提示:
-                        - 注意平衡短期与长期利益
-                        - 考虑其他玩家可能的行动
-                        - 关注贵族卡的要求
-                        - 预留对你重要或对对手有价值的卡牌
-                        - 留意游戏板上的卡牌分布
-                        请你对已有的计划进行修改，这个计划应该最终指引你获得游戏胜利。
-                        由于游戏局势不断变化，你的计划可能只是需要在未来数个回合中被完成，不需要完美地预测到所有情况，你只需要保证你接下来的几个计划对于最终胜利是有帮助的。 
-                        这个计划应该包括单独的任务，这个任务可能需要多个回合去完成，
-                        例如你可能需要三到四个回合来搜集宝石并兑换第二级别的第一张卡，或者你可能需要预先扣留第三级别的某一张七分卡并再接下来三个回合兑换它。
-                        确保每一步都有所有需要的信息——不要跳过任何步骤。""",
+                    """你是璀璨宝石策略代理。
+根据当前局势对计划做短更新，只保留未来 1 到 3 步。
+只输出 JSON，不要解释。""",
                 ),
                 (
                     "human",
                     """
-                    请分析当前的游戏状态，按照要求修改游戏计划。
                     当前游戏状态:
                     {formatted_state}
-                    你正在实施的计划是这样的：
+                    旧计划：
                     {plan}
-                    当前可用的动作是：
+                    当前动作：
                     {valid_actions}
-                    你目前针对之前的任务列表已经完成了如下工作(仅包含过去五步）：
+                    最近执行：
                     {past_steps}
-                    请你注意最近一个任务，它可能需要多步去完成，而已经记录的可能只是多步中的一部分，这代表该任务可能还没有完成。
-                    并且你需要注意如果最近一个任务的内容与可用动作列表有冲突，要及时修改当前任务。
-                    如果你认为它还没有完成且无需修改，请你在新制定的计划中依然将它放在第一位。
-                    相应地更新你的计划。只向计划中添加仍需完成的步骤。不要返回先前完成的步骤作为计划的一部分。
-                    请给出计划以及对应的思路。
+                    请只输出 JSON，格式如下：
+                    {{"steps":["步骤1","步骤2"],"reason":"一句话原因"}}
                     """
                 )
             ]

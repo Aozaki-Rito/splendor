@@ -21,7 +21,7 @@ def load_config(config_path: str = "config.json") -> Dict[str, Any]:
     
     # 处理环境变量中的API密钥
     for model in config.get("models", []):
-        env_key = f"{model['type'].upper()}_API_KEY"
+        env_key = model.get("api_key_env") or f"{model['type'].upper()}_API_KEY"
         if not model.get("api_key") and env_key in os.environ:
             model["api_key"] = os.environ[env_key]
     

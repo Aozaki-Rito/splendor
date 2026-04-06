@@ -40,6 +40,7 @@ class Evaluator:
         """
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
+        self.output_dir = output_dir
         
         # 运行指定数量的游戏
         for game_idx in range(self.num_games):
@@ -136,8 +137,8 @@ class Evaluator:
         }
         
         # 保存游戏历史
-        history_file = os.path.join("results", f"game_{game_idx}_history.json")
-        os.makedirs("results", exist_ok=True)
+        history_file = os.path.join(self.output_dir, f"game_{game_idx}_history.json")
+        os.makedirs(self.output_dir, exist_ok=True)
         with open(history_file, "w", encoding="utf-8") as f:
             json.dump(game.history, f, ensure_ascii=False, indent=2)
         
