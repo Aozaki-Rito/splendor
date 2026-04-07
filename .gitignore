@@ -21,8 +21,10 @@ wheels/
 .installed.cfg
 *.egg
 venv/
+.venv/
 ENV/
 .pytest_cache/
+.mplconfig/
 
 # IDE相关
 .idea/

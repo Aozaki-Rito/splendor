@@ -8,6 +8,7 @@ import argparse
 import time
 import random
 import shutil
+from contextlib import nullcontext
 from threading import Thread
 from typing import List, Dict, Any
 from pathlib import Path
@@ -18,6 +19,7 @@ from rich.console import Console
 from game.game import Game
 from game.player import Player
 from agents.base_agent import BaseAgent
+from agents.human_agent import HumanAgent
 from agents.random_agent import RandomAgent
 from agents.llm_agent import LLMAgent
 from agents.rule_based_agent import RuleBasedAgent
@@ -154,6 +156,13 @@ def create_run_dir(run_id: str, mode: str, args: argparse.Namespace, config: Dic
     return run_dir
 
 
+def bind_agents_to_game(game: Game, agents: List[BaseAgent]) -> None:
+    """将代理绑定到当前游戏实例。"""
+    game.agent_map = {agent.player_id: agent for agent in agents}
+    for agent in agents:
+        agent._game = game
+
+
 def save_game_history_artifact(game: Game, run_dir: Path, file_name: str = "game_history.json") -> Path:
     """将当前游戏历史保存到运行目录。"""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +174,9 @@ def save_game_history_artifact(game: Game, run_dir: Path, file_name: str = "game
 def run_game_with_render(args):
     """运行单个游戏"""
     console = Console()
+    if getattr(args, "human_players", 0):
+        console.print("[bold red]终端渲染模式暂不支持人类玩家，请使用 --use_pygame 1。[/bold red]")
+        return
     run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
     
     # 加载配置
@@ -269,8 +281,7 @@ def run_game_with_render(args):
     
     # 创建游戏
     game = Game(players, seed=seed)
-    for agent in agents:
-        agent._game = game
+    bind_agents_to_game(game, agents)
     
     # 创建渲染器
     renderer = GameRenderer(game)
@@ -332,7 +343,8 @@ def run_game_with_render(args):
                 console.print("没有有效动作，跳过")
         
         # 进入下一个玩家
-        game.next_player()
+        if not game.game_over:
+            game.next_player()
         
         # 更新渲染
         renderer.render()
@@ -356,7 +368,16 @@ def run_game_with_render(args):
         history_file = save_game_history_artifact(game, run_dir)
         console.print(f"\n游戏历史已保存到: {history_file}")
 
-def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_history: bool = False, seed: int = None, players: List[Player] = None, run_dir: Path = None):
+def run_game_logic(
+    game: Game,
+    agents: List[BaseAgent],
+    delay: float,
+    save_history: bool = False,
+    seed: int = None,
+    players: List[Player] = None,
+    run_dir: Path = None,
+    state_lock=None,
+):
     """游戏逻辑线程入口"""
     # 运行游戏直到结束
     console = Console()
@@ -374,42 +395,42 @@ def run_game_logic(game: Game, agents: List[BaseAgent], delay: float, save_histo
     executed_turns = 0
 
     while not game.game_over:
+        lock_ctx = state_lock if state_lock is not None else nullcontext()
         if max_turns is not None and executed_turns >= max_turns:
             console.print(f"[yellow]已达到测试回合上限: {max_turns}，提前停止逻辑线程。[/yellow]")
             game.game_over = True
             break
-        current_player = game.get_current_player()
-        current_agent = next((a for a in agents if a._player == current_player), None)
-        
+
+        with lock_ctx:
+            current_player = game.get_current_player()
+            current_agent = next((a for a in agents if a._player == current_player), None)
+            game_state = game.get_game_state()
+            valid_actions = game.get_valid_actions()
+
         if current_agent:
-            
             # 回合开始
             console.print(f"\n[bold green]{current_player.name}[/bold green] 的回合:")
-            game_state = game.get_game_state()
             current_agent.on_turn_start(game_state)
-            
-            # 获取有效动作
-            valid_actions = game.get_valid_actions()
-            
+
             if valid_actions:
                 # 让代理选择动作
                 start_time = time.time()
                 selected_action = current_agent.select_action(game_state, valid_actions)
                 end_time = time.time()
-                
-                # 记录决策时间
                 decision_time = end_time - start_time
-                
-                # 执行动作
-                success = game.execute_action(selected_action)
-                
-                # 回合结束
-                game_state = game.get_game_state()
-                current_agent.on_turn_end(game_state, selected_action, success)
+                console.print(f"决策时间: {decision_time:.2f}秒")
+
+                with lock_ctx:
+                    success = game.execute_action(selected_action)
+                    game_state = game.get_game_state()
+                    current_agent.on_turn_end(game_state, selected_action, success)
+                    if not game.game_over:
+                        game.next_player()
                 executed_turns += 1
-        
-        # 进入下一个玩家
-        game.next_player()
+            else:
+                with lock_ctx:
+                    if not game.game_over:
+                        game.next_player()
         
         # 如果命令行参数中指定了延迟，则等待
         if delay > 0:
@@ -448,9 +469,18 @@ def run_game_with_pygame(args):
     seed = args.seed or game_settings.get("seed")
     delay = args.delay or game_settings.get("delay", 0.5)
     save_history = args.save_history or game_settings.get("save_history", False)
-    
-    # 创建代理
-    agents = []
+
+    if args.human_players not in (0, 1):
+        console.print("[bold red]pygame 模式当前只支持 0 或 1 个真人玩家。[/bold red]")
+        return
+    if args.human_players == 1 and num_players != 2:
+        console.print("[bold red]真人交互模式 V1 当前只支持 2 人对局。[/bold red]")
+        return
+    if args.human_players == 1 and not (1 <= args.human_seat <= num_players):
+        console.print(f"[bold red]human seat 超出范围: {args.human_seat}[/bold red]")
+        return
+
+    agents: List[BaseAgent] = []
     
     # 获取要使用的模型列表
     model_names = []
@@ -469,6 +499,8 @@ def run_game_with_pygame(args):
     while len(model_names) < args.num_llm_agents and default_model:
         model_names.append(default_model)
     
+    ai_agents: List[BaseAgent] = []
+
     for i, model_name in enumerate(model_names):
         model_config = get_model_config(config, model_name)
         
@@ -503,7 +535,7 @@ def run_game_with_pygame(args):
                 )
                 console.print(f"[blue]代理日志文件: {agent.log_file_path}[/blue]")
 
-                agents.append(agent)
+                ai_agents.append(agent)
                 console.print(f"[green]已成功创建LLM代理: {model_config.get('name')}[/green]")
             except Exception as e:
                 console.print(f"[bold red]创建LLM代理失败 ({model_name}): {e}[/bold red]")
@@ -512,19 +544,38 @@ def run_game_with_pygame(args):
         else:
             console.print(f"[bold red]错误: 未找到模型'{model_name}'的配置[/bold red]")
 
+    available_ai_seats = num_players - args.human_players
+    if len(ai_agents) > available_ai_seats:
+        console.print("[bold red]模型代理数量超过可用 AI 座位数，请减少 --num-llm-agents 或调整座位。[/bold red]")
+        return
 
     # 补充随机代理，确保总共有足够的代理
-    num_random_agents = num_players - len(agents)
+    num_random_agents = available_ai_seats - len(ai_agents)
     for i in range(num_random_agents):
         agent = RandomAgent(
             player_id=f"random_agent_{i+1}",
             name=f"随机代理 {i+1}"
         )
-        agents.append(agent)
-    
+        ai_agents.append(agent)
+
+    seat_agents: List[BaseAgent] = [None] * num_players
+    if args.human_players == 1:
+        human_agent = HumanAgent(
+            player_id=f"human_agent_{args.human_seat}",
+            name="人类玩家",
+        )
+        seat_agents[args.human_seat - 1] = human_agent
+
+    ai_iter = iter(ai_agents)
+    for idx in range(num_players):
+        if seat_agents[idx] is None:
+            seat_agents[idx] = next(ai_iter)
+
+    agents = [agent for agent in seat_agents if agent is not None]
+
     # 创建玩家
     players = []
-    for agent in agents:
+    for agent in seat_agents:
         player = Player(agent.player_id, agent.name)
         players.append(player)
         
@@ -534,13 +585,17 @@ def run_game_with_pygame(args):
     
     # 创建游戏
     game = Game(players, seed=seed)
-    for agent in agents:
-        agent._game = game
+    bind_agents_to_game(game, agents)
     game.max_turns = args.max_turns
-    pygame_ui = PygameUI(game)
+    pygame_ui = PygameUI(game, agents=agents, fullscreen=bool(args.fullscreen))
 
     # 启动游戏逻辑线程
-    logic_thread = Thread(target=run_game_logic, args=(game, agents, delay, save_history, seed, players, run_dir), daemon=True)
+    logic_thread = Thread(
+        target=run_game_logic,
+        args=(game, agents, delay, save_history, seed, players, run_dir),
+        kwargs={"state_lock": pygame_ui.lock},
+        daemon=True,
+    )
     logic_thread.start()
 
     # 主线程负责渲染
@@ -693,6 +748,9 @@ def main():
     game_parser.add_argument("--use_pygame", type=int, choices=[0,1], default=1, help="1=pygame 图形界面，0=终端渲染")
     game_parser.add_argument("--use_langgraph", type=int, choices=[0,1], default=0, help="1=强制使用 LangGraph；不能与 rl_ppo 或 rank_v2_auto 同时使用")
     game_parser.add_argument("--max-turns", type=int, help="调试用；达到该动作数后提前停止")
+    game_parser.add_argument("--human-players", type=int, default=0, help="pygame 模式下的人类玩家数量，V1 仅支持 0 或 1")
+    game_parser.add_argument("--human-seat", type=int, default=1, help="pygame 模式下人类玩家座位（1-based）")
+    game_parser.add_argument("--fullscreen", type=int, choices=[0,1], default=0, help="pygame 模式下是否以全屏启动；进入游戏后也可按 F11 切换")
     
 
     # 为每个可能的LLM代理添加特定的模型参数
@@ -715,6 +773,10 @@ def main():
     if not args.command:
         args.command = "game"
     
+    if args.command == "game" and getattr(args, "human_players", 0) and args.use_pygame == 0:
+        print("真人交互模式需要 use_pygame=1")
+        sys.exit(1)
+
     if args.command == "game" and args.use_pygame == 0:
         print("不使用pygame图形界面:", args.use_pygame)
         run_game_with_render(args)

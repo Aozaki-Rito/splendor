@@ -96,10 +96,15 @@ class Game:
         self.winner = None
         self.last_round = False
         self.history = []  # 游戏历史记录
+        self.agent_map = {}
     
     def get_current_player(self) -> Player:
         """获取当前行动的玩家"""
         return self.players[self.current_player_index]
+
+    def get_agent_for_player(self, player: Player):
+        """根据玩家获取对应代理。"""
+        return self.agent_map.get(player.player_id)
     
     def next_player(self):
         """切换到下一个玩家"""
@@ -411,36 +416,121 @@ class Game:
     def _check_and_discard_gems(self, player: Player):
         """检查并处理玩家超过10个宝石的情况"""
         total_gems = player.get_total_gems()
-        
+
         while total_gems > 10:
-            # 这里需要由玩家选择丢弃哪些宝石
-            # 在AI对战框架中，需要请求代理做出选择
-            
-            # 临时策略：丢弃随机宝石
-            available_colors = [color for color, count in player.gems.items() if count > 0]
-            if not available_colors:
+            num_to_discard = total_gems - 10
+            agent = self.get_agent_for_player(player)
+            game_state = self.get_game_state()
+            gems_snapshot = {color.value: count for color, count in player.gems.items() if count > 0}
+
+            discarded = {}
+            if agent is not None:
+                discarded = agent.select_gems_to_discard(game_state, gems_snapshot, num_to_discard) or {}
+
+            applied = self._apply_discard_choice(player, discarded, num_to_discard)
+            if applied < num_to_discard:
+                fallback_discard = self._fallback_discard_choice(player, num_to_discard - applied)
+                self._apply_discard_choice(player, fallback_discard, num_to_discard - applied)
+
+            total_gems = player.get_total_gems()
+
+    def _coerce_gem_color(self, color_key) -> Optional[GemColor]:
+        """将字符串或 GemColor 统一解析为 GemColor。"""
+        if isinstance(color_key, GemColor):
+            return color_key
+        if isinstance(color_key, str):
+            normalized = color_key.strip().lower()
+            for color in GemColor:
+                if color.value == normalized:
+                    return color
+        return None
+
+    def _apply_discard_choice(self, player: Player, discarded: Dict, limit: int) -> int:
+        """应用代理提交的弃牌选择，返回实际弃牌数。"""
+        applied = 0
+        for color_key, raw_count in discarded.items():
+            color = self._coerce_gem_color(color_key)
+            if color is None:
+                continue
+
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                continue
+
+            if count <= 0:
+                continue
+
+            available = player.gems.get(color, 0)
+            actual = min(count, available, limit - applied)
+            if actual <= 0:
+                continue
+
+            player.gems[color] -= actual
+            self.board.gems[color] = self.board.gems.get(color, 0) + actual
+            applied += actual
+
+            if applied >= limit:
                 break
-                
-            color_to_discard = random.choice(available_colors)
-            player.gems[color_to_discard] -= 1
-            self.board.gems[color_to_discard] += 1
-            
-            total_gems -= 1
+
+        return applied
+
+    def _fallback_discard_choice(self, player: Player, num_to_discard: int) -> Dict[GemColor, int]:
+        """当代理未给出有效弃牌结果时的兜底策略。"""
+        discarded: Dict[GemColor, int] = {}
+        remaining = num_to_discard
+
+        colors = sorted(
+            [color for color, count in player.gems.items() if count > 0 and color != GemColor.GOLD],
+            key=lambda color: (-player.gems[color], color.value),
+        )
+        if not colors:
+            colors = sorted(
+                [color for color, count in player.gems.items() if count > 0],
+                key=lambda color: (-player.gems[color], color.value),
+            )
+
+        for color in colors:
+            if remaining <= 0:
+                break
+            actual = min(player.gems.get(color, 0), remaining)
+            if actual <= 0:
+                continue
+            discarded[color] = discarded.get(color, 0) + actual
+            remaining -= actual
+
+        return discarded
     
     def _check_nobles_visit(self, player: Player):
         """检查并处理贵族访问"""
         visiting_nobles = []
-        
+
         for noble in self.board.nobles:
             if player.can_be_visited_by_noble(noble):
                 visiting_nobles.append(noble)
-        
+
         if visiting_nobles:
-            # 如果有多个贵族可以访问，玩家可以选择一个
-            # 在AI对战框架中，需要请求代理做出选择
-            
-            # 临时策略：选择第一个贵族
             noble = visiting_nobles[0]
+            if len(visiting_nobles) > 1:
+                agent = self.get_agent_for_player(player)
+                if agent is not None:
+                    game_state = self.get_game_state()
+                    noble_options = [
+                        {
+                            "id": item.noble_id,
+                            "points": item.points,
+                            "requirements": {color.value: count for color, count in item.requirements.items()},
+                        }
+                        for item in visiting_nobles
+                    ]
+                    selected_noble_id = agent.select_noble(game_state, noble_options) or ""
+                    selected_noble = next(
+                        (item for item in visiting_nobles if item.noble_id == selected_noble_id),
+                        None,
+                    )
+                    if selected_noble is not None:
+                        noble = selected_noble
+
             self.board.remove_noble(noble.noble_id)
             player.nobles.append(noble)
     

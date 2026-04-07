@@ -86,6 +86,7 @@ class Evaluator:
         
         # 创建游戏
         game = Game(players, seed=seed)
+        game.agent_map = {agent.player_id: agent for agent in shuffled_agents}
         for agent in shuffled_agents:
             agent._game = game
         
@@ -118,8 +119,8 @@ class Evaluator:
                     game_state = game.get_game_state()
                     current_agent.on_turn_end(game_state, selected_action, success)
                 
-            # 进入下一个玩家
-            game.next_player()
+            if not game.game_over:
+                game.next_player()
         
         # 游戏结束
         game_state = game.get_game_state()

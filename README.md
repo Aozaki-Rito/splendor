@@ -17,11 +17,11 @@
 
 ## 环境准备
 
-推荐使用 conda：
+推荐使用项目内虚拟环境：
 
 ```bash
-conda create -n splendor python=3.9 -y
-conda activate splendor
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -98,7 +98,7 @@ python main.py list-models
 {
   "name": "RL PPO Agent (Local)",
   "type": "rl_ppo",
-  "model_path": "runs/rl/v1_ppo_random_seed7_t50k_post_endfix/model.zip",
+  "model_path": "runs/rl/v1_ppo_random_seed7_t50k_local/model.zip",
   "deterministic": true,
   "device": "auto"
 }
@@ -186,6 +186,14 @@ python main.py list-models
   - 调试用，只跑前若干个动作就停
 - `--save-history`
   - 保存游戏历史
+- `--human-players`
+  - 人类玩家数量
+  - 当前 `pygame` 模式下只支持 `0` 或 `1`
+- `--human-seat`
+  - 人类玩家座位号
+  - 当前建议固定为 `1`
+- `--fullscreen 1|0`
+  - 启动时是否直接进入全屏
 
 ## 不能同时开的组合
 
@@ -264,13 +272,57 @@ python main.py game --model "RL PPO Agent (Local)" --use_pygame 1
 - 这条命令当前是 `RL PPO Agent (Local)` 对随机代理的自动对局
 - 还不是“人类玩家手动操作 vs RL Agent”
 
-### 6. 只跑前几回合作烟测
+### 6. 运行人类玩家 vs 本地 PPO
+
+```bash
+MPLCONFIGDIR=.mplconfig .venv/bin/python main.py game \
+  --use_pygame 1 \
+  --human-players 1 \
+  --human-seat 1 \
+  --num-players 2 \
+  --num-llm-agents 1 \
+  --model "RL PPO Agent (Local)" \
+  --delay 0
+```
+
+说明：
+- 当前人机对战只支持 `pygame` 图形界面
+- 当前只支持 `2` 人局，且只支持 `1` 个真人玩家
+- 顶部按钮可以切换 `显示预购 / 显示属性`
+- 顶部按钮或 `F11` 都可以切换全屏
+- 界面已支持按窗口尺寸动态布局，全屏下贵族区、牌区、右侧玩家栏、底部交互区会自动重排
+
+### 7. pygame 真人交互说明
+
+当前真人模式下的交互方式：
+
+- 左键展示卡
+  - 购买这张卡
+- 左键自己的预留卡
+  - 购买这张预留卡
+- 点击 `预留卡牌`
+  - 按钮变深表示当前处于预留状态
+- 预留状态下左键展示卡或牌堆
+  - 预留对应卡牌
+- 左键宝石筹码
+  - 逐步选择拿取组合
+- `确认`
+  - 提交当前已选动作
+- `取消`
+  - 清空当前暂存选择
+
+补充：
+- 超过 `10` 枚宝石时，会进入弃牌选择
+- 同时满足多个贵族时，会进入贵族选择
+- 所有真人输入都走统一确认流程，不会点一下就立刻结算
+
+### 8. 只跑前几回合作烟测
 
 ```bash
 python main.py game --model "RL PPO Agent (Local)" --use_pygame 0 --delay 0 --max-turns 3 --seed 7
 ```
 
-### 7. 批量评测
+### 9. 批量评测
 
 ```bash
 python main.py eval --model "Doubao Seed 2.0 Pro" --num-games 10
@@ -291,7 +343,7 @@ python scripts/train_rl_agent.py --timesteps 50000
 
 ```bash
 python scripts/evaluate_rl_agent.py \
-  --model-path runs/rl/v1_ppo_random_seed7_t50k_post_endfix/model.zip \
+  --model-path runs/rl/v1_ppo_random_seed7_t50k_local/model.zip \
   --episodes 20 \
   --opponent random
 ```
@@ -300,9 +352,9 @@ python scripts/evaluate_rl_agent.py \
 
 - `MaskablePPO + MlpPolicy`
 - `50000 timesteps`
-- 修复终局判定 bug 后重新训练
-- 修复动作编码 bug 后重新评估
-- 对随机代理 `20` 局结果为 `18胜 2负 0平`
+- 当前默认配置已直接指向本地训练好的模型
+- 对随机代理 `20` 局结果为 `20胜 0负 0平`
+- `main.py game` 已可以直接加载该模型
 
 ## 输出产物
 
