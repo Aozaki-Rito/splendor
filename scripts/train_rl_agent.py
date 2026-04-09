@@ -30,6 +30,16 @@ def parse_args():
     parser.add_argument("--n-steps", type=int, default=1024, help="PPO rollout 长度")
     parser.add_argument("--batch-size", type=int, default=256, help="PPO batch size")
     parser.add_argument("--gamma", type=float, default=0.99, help="折扣因子")
+    parser.add_argument("--gae-lambda", type=float, default=0.95, help="GAE lambda")
+    parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clip range")
+    parser.add_argument("--ent-coef", type=float, default=0.0, help="熵正则系数，鼓励更高探索")
+    parser.add_argument("--step-penalty", type=float, default=0.02, help="每个有效动作的惩罚，鼓励更快结束对局")
+    parser.add_argument("--round-penalty-scale", type=float, default=0.0, help="按当前回合递增的额外惩罚，鼓励更早结束")
+    parser.add_argument("--score-speed-scale", type=float, default=0.0, help="得分越早越值钱的 shaping 强度")
+    parser.add_argument("--score-speed-reference-round", type=int, default=25, help="得分速度 shaping 的参考回合数")
+    parser.add_argument("--win-speed-scale", type=float, default=0.0, help="胜利时按终局回合给额外 shaping，鼓励更早获胜")
+    parser.add_argument("--win-speed-reference-round", type=int, default=40, help="胜利速度 shaping 的参考回合数")
+    parser.add_argument("--progress-bar", type=int, choices=[0, 1], default=1, help="是否显示训练进度条")
     return parser.parse_args()
 
 
@@ -48,6 +58,16 @@ def main():
         "n_steps": args.n_steps,
         "batch_size": args.batch_size,
         "gamma": args.gamma,
+        "gae_lambda": args.gae_lambda,
+        "clip_range": args.clip_range,
+        "ent_coef": args.ent_coef,
+        "step_penalty": args.step_penalty,
+        "round_penalty_scale": args.round_penalty_scale,
+        "score_speed_scale": args.score_speed_scale,
+        "score_speed_reference_round": args.score_speed_reference_round,
+        "win_speed_scale": args.win_speed_scale,
+        "win_speed_reference_round": args.win_speed_reference_round,
+        "progress_bar": bool(args.progress_bar),
         "run_name": run_name,
     }
     with open(artifact_dir / "train_config.json", "w", encoding="utf-8") as f:
@@ -57,6 +77,12 @@ def main():
         SplendorEnv(
             opponent_type=args.opponent,
             max_episode_steps=args.max_episode_steps,
+            step_penalty=args.step_penalty,
+            round_penalty_scale=args.round_penalty_scale,
+            score_speed_scale=args.score_speed_scale,
+            score_speed_reference_round=args.score_speed_reference_round,
+            win_speed_scale=args.win_speed_scale,
+            win_speed_reference_round=args.win_speed_reference_round,
             seed=args.seed,
         ),
         filename=str(artifact_dir / "monitor.csv"),
@@ -72,9 +98,12 @@ def main():
         n_steps=args.n_steps,
         batch_size=args.batch_size,
         gamma=args.gamma,
+        gae_lambda=args.gae_lambda,
+        clip_range=args.clip_range,
+        ent_coef=args.ent_coef,
     )
 
-    model.learn(total_timesteps=args.timesteps, progress_bar=True, tb_log_name=run_name)
+    model.learn(total_timesteps=args.timesteps, progress_bar=bool(args.progress_bar), tb_log_name=run_name)
 
     save_path = Path(args.save_path) if args.save_path else artifact_dir / "model.zip"
     save_path.parent.mkdir(parents=True, exist_ok=True)

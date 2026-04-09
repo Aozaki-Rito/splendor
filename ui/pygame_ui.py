@@ -252,6 +252,10 @@ class PygameUI:
                     return
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                     self.toggle_fullscreen()
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN) and self.game.game_over:
+                    self.running = False
+                    pygame.quit()
+                    return
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self._handle_mouse_click(event.pos, event.button)
 
@@ -268,6 +272,8 @@ class PygameUI:
             return
         if layout_buttons["fullscreen"].collidepoint(mx, my):
             self.toggle_fullscreen()
+            return
+        if self.game.game_over:
             return
 
         request = self._get_pending_request()
@@ -377,6 +383,8 @@ class PygameUI:
 
         current_player = self.game.get_current_player()
         round_text = f"第 {self.game.round_number} 回合 | 当前玩家: {current_player.name}"
+        if self.game.last_round and not self.game.game_over:
+            round_text += " | 最后一轮"
         self._draw_text(
             round_text,
             (self.layout["margin"], self.layout["top_bar_y"] + 6),
@@ -459,6 +467,8 @@ class PygameUI:
             )
 
         self._draw_interaction_panel(request)
+        if self.game.game_over:
+            self._draw_game_over_overlay()
         pygame.display.flip()
 
     def _get_top_button_rects(self) -> Dict[str, pygame.Rect]:
@@ -729,6 +739,54 @@ class PygameUI:
             self._button_targets.append((rect, option))
 
         self._draw_confirm_row(x + pad, y + panel_h - 62, request)
+
+    def _draw_game_over_overlay(self):
+        overlay = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((12, 18, 28, 168))
+        self.screen.blit(overlay, (0, 0))
+
+        screen_w, screen_h = self.screen.get_size()
+        panel_w = min(720, int(screen_w * 0.62))
+        panel_h = min(440, int(screen_h * 0.58))
+        panel_x = (screen_w - panel_w) // 2
+        panel_y = (screen_h - panel_h) // 2
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+
+        pygame.draw.rect(self.screen, (250, 248, 242), panel_rect, border_radius=18)
+        pygame.draw.rect(self.screen, (186, 151, 82), panel_rect, width=3, border_radius=18)
+
+        winners = self.game.winner or []
+        winner_names = [player.name for player in winners]
+        if not winner_names:
+            title = "游戏结束"
+            subtitle = "本局已结束"
+        elif len(winner_names) == 1:
+            title = "游戏结束"
+            subtitle = f"胜利者：{winner_names[0]}"
+        else:
+            title = "游戏结束"
+            subtitle = f"平局：{', '.join(winner_names)}"
+
+        self._draw_text(title, (panel_x + 28, panel_y + 24), size=34, color=(60, 48, 32))
+        self._draw_text(subtitle, (panel_x + 28, panel_y + 72), size=24, color=(120, 92, 48))
+
+        info_y = panel_y + 120
+        for idx, player in enumerate(
+            sorted(self.game.players, key=lambda item: (-item.get_score(), len(item.cards), item.name))
+        ):
+            is_winner = player in winners
+            row_rect = pygame.Rect(panel_x + 26, info_y + idx * 52, panel_w - 52, 42)
+            row_bg = (230, 242, 222) if is_winner else (239, 236, 229)
+            row_fg = (44, 86, 44) if is_winner else (58, 58, 68)
+            pygame.draw.rect(self.screen, row_bg, row_rect, border_radius=10)
+            label = (
+                f"{player.name} | 分数 {player.get_score()} | 发展卡 {len(player.cards)} | "
+                f"贵族 {len(player.nobles)} | 预留 {len(player.reserved_cards)}"
+            )
+            self._draw_text(label, (row_rect.x + 14, row_rect.y + 9), size=20, color=row_fg)
+
+        footer = "点击窗口关闭按钮，或按 Enter / Esc 退出"
+        self._draw_text(footer, (panel_x + 28, panel_y + panel_h - 44), size=18, color=(96, 96, 108))
 
     def _draw_confirm_row(self, x: int, y: int, request: Dict[str, Any]):
         if self._draft_label:

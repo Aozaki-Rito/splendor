@@ -98,7 +98,7 @@ python main.py list-models
 {
   "name": "RL PPO Agent (Local)",
   "type": "rl_ppo",
-  "model_path": "runs/rl/v1_ppo_random_seed7_t50k_local/model.zip",
+  "model_path": "runs/rl/v2_local_best/model.zip",
   "deterministic": true,
   "device": "auto"
 }
@@ -336,24 +336,26 @@ RL 设计文档：
 训练：
 
 ```bash
-python scripts/train_rl_agent.py --timesteps 50000
+python scripts/train_rl_agent.py --timesteps 50000 --step-penalty 0.02
 ```
 
 评估：
 
 ```bash
 python scripts/evaluate_rl_agent.py \
-  --model-path runs/rl/v1_ppo_random_seed7_t50k_local/model.zip \
+  --model-path runs/rl/v2_local_best/model.zip \
   --episodes 20 \
-  --opponent random
+  --opponent random \
+  --step-penalty 0.02
 ```
 
 当前基线：
 
 - `MaskablePPO + MlpPolicy`
-- `50000 timesteps`
-- 当前默认配置已直接指向本地训练好的模型
-- 对随机代理 `20` 局结果为 `20胜 0负 0平`
+- 当前固定的本地默认版本为 `RL v2`
+- `RL v2` 对应本地别名路径：`runs/rl/v2_local_best/model.zip`
+- `RL v2` 当前指向已完成调参里表现最好的 `v9a`
+- `v9a` 的真实 benchmark 结果：`avg_rl_trigger_round=31.0`，`avg_final_round=32.3`
 - `main.py game` 已可以直接加载该模型
 
 ## 输出产物

@@ -7,10 +7,15 @@ from colorama import Fore, Style, init
 from datetime import datetime
 import numpy as np
 
+_COLORAMA_INITIALIZED = False
+
 class CustomLogger:
     def __init__(self, log_name=None, max_bytes=10*1024*1024, backup_count=5):
-        # 初始化 colorama
-        init(autoreset=True)
+        global _COLORAMA_INITIALIZED
+        # colorama 只需要初始化一次；重复 init 会不断注册 atexit 回调。
+        if not _COLORAMA_INITIALIZED:
+            init(autoreset=True)
+            _COLORAMA_INITIALIZED = True
         log_file = log_name if log_name else None
         # 配置日志记录器
         self.logger = logging.getLogger(f"custom_logger_{log_name}")

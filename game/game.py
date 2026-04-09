@@ -105,6 +105,30 @@ class Game:
     def get_agent_for_player(self, player: Player):
         """根据玩家获取对应代理。"""
         return self.agent_map.get(player.player_id)
+
+    def _get_valid_actions_for_player_index(self, player_index: int) -> List[Action]:
+        """获取指定座位玩家的合法动作，不改变最终当前玩家。"""
+        original_index = self.current_player_index
+        try:
+            self.current_player_index = player_index
+            return self.get_valid_actions()
+        finally:
+            self.current_player_index = original_index
+
+    def end_if_stalemated(self) -> bool:
+        """
+        如果所有玩家都没有合法动作，则结束游戏并按当前分数判定胜者。
+
+        Returns:
+            bool: 是否因为僵局结束了游戏。
+        """
+        for player_index in range(self.num_players):
+            if self._get_valid_actions_for_player_index(player_index):
+                return False
+
+        self.game_over = True
+        self._determine_winner()
+        return True
     
     def next_player(self):
         """切换到下一个玩家"""
@@ -149,6 +173,9 @@ class Game:
             if self.board.gems.get(color, 0) > 0:
                 available_colors.append(color)
         
+        if not available_colors:
+            return actions
+
         # 如果可用颜色少于3种，则返回所有可能的组合
         if len(available_colors) <= 3:
             actions.append(Action(ActionType.TAKE_DIFFERENT_GEMS, colors=available_colors))
@@ -583,6 +610,8 @@ class Game:
         valid_actions = self.get_valid_actions()
         
         if not valid_actions:
+            if self.end_if_stalemated():
+                return False
             # 如果没有有效动作，跳过当前玩家
             self.next_player()
             return True

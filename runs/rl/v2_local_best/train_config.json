@@ -1,0 +1,15 @@
+{
+  "timesteps": 100000,
+  "seed": 7,
+  "opponent": "random",
+  "max_episode_steps": 200,
+  "learning_rate": 0.0003,
+  "n_steps": 1024,
+  "batch_size": 256,
+  "gamma": 0.95,
+  "step_penalty": 0.02,
+  "win_speed_scale": 1.5,
+  "win_speed_reference_round": 25,
+  "progress_bar": false,
+  "run_name": "v2_local_best"
+}

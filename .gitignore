@@ -42,6 +42,15 @@ agents/langgraph_agent_memory.json
 scripts/__pycache__/
 runs/
 models/
+!runs/
+/runs/*
+!runs/rl/
+/runs/rl/*
+!runs/rl/v2_local_best/
+/runs/rl/v2_local_best/*
+!runs/rl/v2_local_best/model.zip
+!runs/rl/v2_local_best/train_config.json
+!runs/rl/v2_local_best/train_summary.json
 
 # 配置文件
 .env

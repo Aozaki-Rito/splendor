@@ -21,7 +21,7 @@
     {
       "name": "RL PPO Agent (Local)",
       "type": "rl_ppo",
-      "model_path": "runs/rl/v1_ppo_random_seed7_t50k_local/model.zip",
+      "model_path": "runs/rl/v2_local_best/model.zip",
       "deterministic": true,
       "device": "auto"
     }

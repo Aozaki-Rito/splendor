@@ -18,6 +18,7 @@ class RuleBasedAgent(BaseAgent):
         candidate_action_limit: int = 6,
         target_limit: int = 4,
         noble_limit: int = 3,
+        enable_file_logging: bool = True,
         run_id: Optional[str] = None,
     ):
         super().__init__(player_id, name)
@@ -36,8 +37,9 @@ class RuleBasedAgent(BaseAgent):
             log_dir,
             f"{self.run_id}_{safe_player_id}_rank_v2_auto.log"
         )
-        self.logger = CustomLogger(self.log_file_path)
-        self.logger.enable_file_logging()
+        self.logger = CustomLogger(self.log_file_path if enable_file_logging else None)
+        if enable_file_logging:
+            self.logger.enable_file_logging()
         self.logger.log_info(
             {
                 "agent_name": self.name,

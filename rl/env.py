@@ -27,6 +27,12 @@ class SplendorEnv(gym.Env):
         win_reward: float = 10.0,
         loss_reward: float = -10.0,
         score_delta_scale: float = 1.0,
+        step_penalty: float = 0.02,
+        round_penalty_scale: float = 0.0,
+        score_speed_scale: float = 0.0,
+        score_speed_reference_round: int = 25,
+        win_speed_scale: float = 0.0,
+        win_speed_reference_round: int = 40,
         seed: Optional[int] = None,
     ):
         super().__init__()
@@ -43,6 +49,12 @@ class SplendorEnv(gym.Env):
         self.win_reward = win_reward
         self.loss_reward = loss_reward
         self.score_delta_scale = score_delta_scale
+        self.step_penalty = step_penalty
+        self.round_penalty_scale = round_penalty_scale
+        self.score_speed_scale = score_speed_scale
+        self.score_speed_reference_round = score_speed_reference_round
+        self.win_speed_scale = win_speed_scale
+        self.win_speed_reference_round = win_speed_reference_round
         self.base_seed = seed
 
         self.action_space = spaces.Discrete(ACTION_DIM)
@@ -51,6 +63,7 @@ class SplendorEnv(gym.Env):
         self.game: Optional[Game] = None
         self.step_count = 0
         self.episode_seed = seed
+        self.episode_index = 0
         self.opponent_agent = None
 
     def _create_opponent_agent(self):
@@ -63,6 +76,7 @@ class SplendorEnv(gym.Env):
                 candidate_action_limit=6,
                 target_limit=4,
                 noble_limit=3,
+                enable_file_logging=False,
             )
         raise ValueError(f"不支持的对手类型: {self.opponent_type}")
 
@@ -100,6 +114,8 @@ class SplendorEnv(gym.Env):
             valid_actions = self.game.get_valid_actions()
 
             if not valid_actions:
+                if self.game.end_if_stalemated():
+                    return
                 self.game.next_player()
                 continue
 
@@ -113,11 +129,17 @@ class SplendorEnv(gym.Env):
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[Dict] = None):
         super().reset(seed=seed)
-        if seed is None:
-            seed = self.base_seed
-        self.episode_seed = seed
+        if seed is not None:
+            episode_seed = seed
+        elif self.base_seed is not None:
+            episode_seed = self.base_seed + self.episode_index
+        else:
+            episode_seed = int(self.np_random.integers(0, 2**31 - 1))
+
+        self.episode_seed = episode_seed
+        self.episode_index += 1
         self.step_count = 0
-        self.game = self._build_game(seed=seed)
+        self.game = self._build_game(seed=episode_seed)
         self._advance_to_controlled_decision()
         obs = self._get_obs()
         info = {"action_mask": self.action_masks()}
@@ -132,6 +154,16 @@ class SplendorEnv(gym.Env):
             raise RuntimeError("当前不是受控玩家回合。")
 
         if not self.game.get_valid_actions():
+            if self.game.end_if_stalemated():
+                obs = self._get_obs()
+                info = {
+                    "action_mask": np.zeros(ACTION_DIM, dtype=bool),
+                    "invalid_action": False,
+                    "self_score": self.game.players[self.controlled_player_index].get_score(),
+                    "opponent_score": self.game.players[1].get_score(),
+                    "winner_ids": self._winner_ids(),
+                }
+                return obs, 0.0, True, False, info
             raise RuntimeError("环境暴露了一个受控玩家无合法动作的状态，这说明推进逻辑存在问题。")
 
         self.step_count += 1
@@ -167,6 +199,14 @@ class SplendorEnv(gym.Env):
         new_opp_score = opponent_player.get_score()
         reward = (new_self_score - prev_self_score) * self.score_delta_scale
         reward -= (new_opp_score - prev_opp_score) * self.score_delta_scale
+        if self.score_speed_scale:
+            round_delta = self.score_speed_reference_round - self.game.round_number
+            reward += (new_self_score - prev_self_score) * self.score_speed_scale * round_delta
+            reward -= (new_opp_score - prev_opp_score) * self.score_speed_scale * round_delta
+        # 给每个有效动作一个很小的时间成本，鼓励更快结束对局。
+        reward -= self.step_penalty
+        # 回合越往后，每一步的成本越高，给策略更密集的“尽快收官”信号。
+        reward -= self.round_penalty_scale * max(0, self.game.round_number - 1)
 
         terminated = self.game.game_over
         truncated = self.step_count >= self.max_episode_steps and not terminated
@@ -175,6 +215,7 @@ class SplendorEnv(gym.Env):
             winner_ids = self._winner_ids()
             if controlled_player.player_id in winner_ids:
                 reward += self.win_reward
+                reward += self.win_speed_scale * (self.win_speed_reference_round - self.game.round_number)
             elif winner_ids:
                 reward += self.loss_reward
 

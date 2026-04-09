@@ -357,6 +357,12 @@ def run_game_with_render(args):
     renderer.render_game_over()
     
     # 游戏结束回调
+    if game.winner:
+        winner_summary = ", ".join(f"{player.name}({player.get_score()}分)" for player in game.winner)
+        console.print(f"[bold yellow]游戏结束，胜者: {winner_summary}[/bold yellow]")
+    else:
+        console.print("[bold yellow]游戏结束。[/bold yellow]")
+
     game_state = game.get_game_state()
     winner_ids = [player.player_id for player in game.winner] if game.winner else []
     
@@ -429,7 +435,7 @@ def run_game_logic(
                 executed_turns += 1
             else:
                 with lock_ctx:
-                    if not game.game_over:
+                    if not game.game_over and not game.end_if_stalemated():
                         game.next_player()
         
         # 如果命令行参数中指定了延迟，则等待

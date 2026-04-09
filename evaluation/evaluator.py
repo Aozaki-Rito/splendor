@@ -99,6 +99,7 @@ class Evaluator:
         while not game.game_over:
             current_player = game.get_current_player()
             current_agent = next((a for a in shuffled_agents if a._player == current_player), None)
+            valid_actions = []
             
             if current_agent:
                 # 回合开始
@@ -119,6 +120,9 @@ class Evaluator:
                     game_state = game.get_game_state()
                     current_agent.on_turn_end(game_state, selected_action, success)
                 
+            if not game.game_over and not valid_actions:
+                game.end_if_stalemated()
+
             if not game.game_over:
                 game.next_player()
         

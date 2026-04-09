@@ -1,0 +1,7 @@
+{
+  "run_name": "v2_local_best",
+  "artifact_dir": "runs/rl/v2_local_best",
+  "model_path": "runs/rl/v2_local_best/model.zip",
+  "tensorboard_log_root": "runs/tensorboard",
+  "timesteps": 100000
+}

@@ -21,6 +21,12 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=7, help="评估随机种子基准")
     parser.add_argument("--opponent", type=str, default="random", choices=["random", "rule_based"], help="对手类型")
     parser.add_argument("--max-episode-steps", type=int, default=200, help="单局最大受控步数")
+    parser.add_argument("--step-penalty", type=float, default=0.02, help="与训练保持一致的每步动作惩罚")
+    parser.add_argument("--round-penalty-scale", type=float, default=0.0, help="与训练保持一致的按回合递增惩罚")
+    parser.add_argument("--score-speed-scale", type=float, default=0.0, help="与训练保持一致的得分速度 shaping")
+    parser.add_argument("--score-speed-reference-round", type=int, default=25, help="得分速度 shaping 的参考回合数")
+    parser.add_argument("--win-speed-scale", type=float, default=0.0, help="与训练保持一致的胜利速度 shaping")
+    parser.add_argument("--win-speed-reference-round", type=int, default=40, help="胜利速度 shaping 的参考回合数")
     parser.add_argument("--output", type=str, default=None, help="评估结果输出路径")
     return parser.parse_args()
 
@@ -41,6 +47,12 @@ def main():
         env = SplendorEnv(
             opponent_type=args.opponent,
             max_episode_steps=args.max_episode_steps,
+            step_penalty=args.step_penalty,
+            round_penalty_scale=args.round_penalty_scale,
+            score_speed_scale=args.score_speed_scale,
+            score_speed_reference_round=args.score_speed_reference_round,
+            win_speed_scale=args.win_speed_scale,
+            win_speed_reference_round=args.win_speed_reference_round,
             seed=args.seed + episode_idx,
         )
         obs, info = env.reset()
@@ -97,6 +109,12 @@ def main():
         "win_rate": wins / args.episodes if args.episodes else 0.0,
         "avg_reward": total_reward / args.episodes if args.episodes else 0.0,
         "avg_steps": total_steps / args.episodes if args.episodes else 0.0,
+        "step_penalty": args.step_penalty,
+        "round_penalty_scale": args.round_penalty_scale,
+        "score_speed_scale": args.score_speed_scale,
+        "score_speed_reference_round": args.score_speed_reference_round,
+        "win_speed_scale": args.win_speed_scale,
+        "win_speed_reference_round": args.win_speed_reference_round,
         "episode_results": episode_results,
     }
 
